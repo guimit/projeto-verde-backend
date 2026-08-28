@@ -19,6 +19,9 @@ API REST em Node.js que serve o painel web e integra com a Bird.com para envio d
 ## Estrutura
 
 ```
+prisma/
+  schema.prisma         # Schema completo da BD (localização padrão do Prisma)
+  migrations/           # Histórico de migrations
 src/
   index.ts              # Entry point, registo de rotas
   controllers/
@@ -35,8 +38,6 @@ src/
     admin.ts
   utils/
     prisma.ts           # Singleton do PrismaClient
-  prisma/
-    schema.prisma       # Schema completo da BD
 ```
 
 ## Roles
