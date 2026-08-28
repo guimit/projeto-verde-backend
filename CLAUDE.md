@@ -73,7 +73,7 @@ Bird é opcional até integrar o envio real:
 - `BIRD_WORKSPACE_ID`
 
 Seed do primeiro admin (`npm run db:seed`):
-- `ADMIN_EMAIL` (default `admin@projetoverde.com`)
+- `ADMIN_EMAIL` (default `contato@guilhermemenezes.com`)
 - `ADMIN_PASSWORD` (default `changeme123`)
 
 ## Comandos
