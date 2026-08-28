@@ -22,6 +22,7 @@ API REST em Node.js que serve o painel web e integra com a Bird.com para envio d
 prisma/
   schema.prisma         # Schema completo da BD (localização padrão do Prisma)
   migrations/           # Histórico de migrations
+  seed.ts               # Cria o primeiro platform_admin
 src/
   index.ts              # Entry point, registo de rotas
   controllers/
@@ -71,6 +72,10 @@ Bird é opcional até integrar o envio real:
 - `BIRD_API_KEY`
 - `BIRD_WORKSPACE_ID`
 
+Seed do primeiro admin (`npm run db:seed`):
+- `ADMIN_EMAIL` (default `admin@projetoverde.com`)
+- `ADMIN_PASSWORD` (default `changeme123`)
+
 ## Comandos
 
 ```bash
@@ -80,6 +85,7 @@ npm run start        # produção
 npm run db:migrate   # aplicar migrations Prisma
 npm run db:generate  # regenerar cliente Prisma após alterar schema
 npm run db:studio    # UI visual da BD
+npm run db:seed      # criar o primeiro platform_admin
 ```
 
 ## Convenções
