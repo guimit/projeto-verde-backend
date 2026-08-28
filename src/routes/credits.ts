@@ -4,7 +4,7 @@ import { prisma } from '../utils/prisma'
 
 const router = Router()
 
-router.post('/:companyId/add', authenticate, requirePlatformAdmin, async (req, res) => {
+router.post<{ companyId: string }>('/:companyId/add', authenticate, requirePlatformAdmin, async (req, res) => {
   const { companyId } = req.params
   const { amount, description } = req.body
 
@@ -20,7 +20,7 @@ router.post('/:companyId/add', authenticate, requirePlatformAdmin, async (req, r
   res.json({ credits: company.credits })
 })
 
-router.get('/:companyId/logs', authenticate, async (req, res) => {
+router.get<{ companyId: string }>('/:companyId/logs', authenticate, async (req, res) => {
   const { companyId } = req.params
   if (req.user?.role !== 'platform_admin' && req.user?.companyId !== companyId) {
     return res.status(403).json({ error: 'Forbidden' })

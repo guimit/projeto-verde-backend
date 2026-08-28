@@ -27,7 +27,7 @@ router.post('/', authenticate, async (req, res) => {
   res.status(201).json(campaign)
 })
 
-router.get('/:id', authenticate, async (req, res) => {
+router.get<{ id: string }>('/:id', authenticate, async (req, res) => {
   const companyId = getCompanyId(req)
   const campaign = await prisma.campaign.findFirst({
     where: { id: req.params.id, companyId },
