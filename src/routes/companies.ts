@@ -17,7 +17,7 @@ router.post('/', authenticate, requirePlatformAdmin, async (req, res) => {
   res.status(201).json(company)
 })
 
-router.get('/:id', authenticate, async (req, res) => {
+router.get<{ id: string }>('/:id', authenticate, async (req, res) => {
   const { id } = req.params
   if (req.user?.role !== 'platform_admin' && req.user?.companyId !== id) {
     return res.status(403).json({ error: 'Forbidden' })

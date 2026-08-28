@@ -32,7 +32,7 @@ export async function me(req: Request, res: Response) {
   return res.json(user)
 }
 
-export async function impersonate(req: Request, res: Response) {
+export async function impersonate(req: Request<{ companyId: string }>, res: Response) {
   const { companyId } = req.params
   const company = await prisma.company.findUnique({ where: { id: companyId } })
   if (!company) return res.status(404).json({ error: 'Company not found' })
