@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  platform_admin
+  admin
+  assistant
+}
+
+enum CampaignStatus {
+  draft
+  scheduled
+  sending
+  done
+  cancelled
+}
+
+enum MessageCategory {
+  marketing
+  utility
+}
+
+model Company {
+  id             String   @id @default(uuid())
+  name           String
+  whatsappNumber String   @unique
+  birdChannelId  String?
+  active         Boolean  @default(true)
+  credits        Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  users      User[]
+  contacts   Contact[]
+  campaigns  Campaign[]
+  templates  Template[]
+  creditLogs CreditLog[]
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+
+  impersonationLogs ImpersonationLog[]
+}
+
+model Contact {
+  id        String   @id @default(uuid())
+  phone     String
+  name      String?
+  consentAt DateTime
+  consentIp String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+
+  messagesSent CampaignMessage[]
+
+  @@unique([companyId, phone])
+}
+
+model Template {
+  id             String          @id @default(uuid())
+  name           String
+  birdTemplateId String?
+  category       MessageCategory
+  bodyText       String
+  variables      String[]
+  approved       Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+
+  campaigns Campaign[]
+}
+
+model Campaign {
+  id          String         @id @default(uuid())
+  name        String
+  status      CampaignStatus @default(draft)
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  totalSent   Int            @default(0)
+  totalFailed Int            @default(0)
+  creditsCost Int            @default(0)
+  filters     Json?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+
+  templateId String
+  template   Template @relation(fields: [templateId], references: [id])
+
+  messages CampaignMessage[]
+}
+
+model CampaignMessage {
+  id            String    @id @default(uuid())
+  birdMessageId String?
+  status        String    @default("pending")
+  sentAt        DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id])
+}
+
+model CreditLog {
+  id           String   @id @default(uuid())
+  amount       Int
+  description  String
+  balanceAfter Int
+  createdAt    DateTime @default(now())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+}
+
+model ImpersonationLog {
+  id              String    @id @default(uuid())
+  targetCompanyId String
+  startedAt       DateTime  @default(now())
+  endedAt         DateTime?
+
+  adminId String
+  admin   User   @relation(fields: [adminId], references: [id])
+}
