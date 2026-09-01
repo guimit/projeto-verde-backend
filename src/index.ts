@@ -9,6 +9,7 @@ import campaignRoutes from './routes/campaigns'
 import templateRoutes from './routes/templates'
 import creditRoutes from './routes/credits'
 import adminRoutes from './routes/admin'
+import webhookRoutes from './routes/webhooks'
 
 dotenv.config()
 
@@ -25,6 +26,7 @@ app.use('/api/campaigns', campaignRoutes)
 app.use('/api/templates', templateRoutes)
 app.use('/api/credits', creditRoutes)
 app.use('/api/admin', adminRoutes)
+app.use('/api/webhooks', webhookRoutes)
 
 app.get('/health', (_, res) => res.json({ ok: true }))
 
