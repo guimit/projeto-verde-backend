@@ -125,13 +125,16 @@ async function resolveCompany(channelId?: string, to?: string) {
 }
 
 // POST /api/webhooks/bird — inbound de WhatsApp (via Bird.com). Sem JWT.
-// Guarda por BIRD_WEBHOOK_SECRET (header x-webhook-secret). Para ligar a assinatura
-// HMAC real do Bird, capturar o raw body em index.ts (express.json({ verify })) e
-// validar aqui o header X-Bird-Signature contra o signing key da subscrição.
+// O Bird não envia um header de segredo partilhado nos webhooks de canal — autentica
+// as entregas por assinatura HMAC. Enquanto essa validação não estiver implementada
+// (capturar o raw body em index.ts com express.json({ verify }) e validar o header
+// X-Bird-Signature contra o signing key da subscrição), o endpoint aceita o pedido.
+// Se BIRD_WEBHOOK_SECRET estiver definido e o header x-webhook-secret não bater certo,
+// apenas registamos um aviso — nunca bloqueamos, para não perder inbounds.
 router.post('/bird', async (req, res) => {
   const secret = process.env.BIRD_WEBHOOK_SECRET
   if (secret && req.header('x-webhook-secret') !== secret) {
-    return res.status(401).json({ error: 'Invalid webhook secret' })
+    console.warn('[bird webhook] x-webhook-secret ausente ou não corresponde — a aceitar mesmo assim')
   }
 
   console.log('[bird webhook] inbound', JSON.stringify(req.body))
