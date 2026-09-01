@@ -14,6 +14,16 @@ router.get('/overview', authenticate, requirePlatformAdmin, async (req, res) => 
   res.json({ totalCompanies, totalContacts, totalCampaigns })
 })
 
+router.get('/users', authenticate, requirePlatformAdmin, async (req, res) => {
+  const { companyId } = req.query
+  const users = await prisma.user.findMany({
+    where: companyId ? { companyId: String(companyId) } : undefined,
+    select: { id: true, name: true, email: true, role: true, active: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+  })
+  res.json(users)
+})
+
 router.post('/users', authenticate, requirePlatformAdmin, async (req, res) => {
   const { name, email, password, role, companyId } = req.body
   const hashed = await bcrypt.hash(password, 10)
