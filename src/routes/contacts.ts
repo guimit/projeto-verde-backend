@@ -17,6 +17,20 @@ router.get('/', authenticate, async (req, res) => {
   res.json(contacts)
 })
 
+router.get<{ id: string }>('/:id/consent', authenticate, async (req, res) => {
+  const companyId = getCompanyId(req)
+  const contact = await prisma.contact.findFirst({
+    where: { id: req.params.id, companyId },
+  })
+  if (!contact) return res.status(404).json({ error: 'Not found' })
+
+  const events = await prisma.consentEvent.findMany({
+    where: { contactId: contact.id },
+    orderBy: { createdAt: 'desc' },
+  })
+  res.json(events)
+})
+
 router.post('/optin', async (req, res) => {
   const { companyId, phone, name, consentIp } = req.body
   const contact = await prisma.contact.upsert({

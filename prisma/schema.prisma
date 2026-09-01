@@ -26,6 +26,18 @@ enum MessageCategory {
   utility
 }
 
+enum OptInState {
+  awaiting_consent
+  awaiting_name
+  confirmed
+  opted_out
+}
+
+enum ConsentEventType {
+  granted
+  revoked
+}
+
 model Company {
   id             String   @id @default(uuid())
   name           String
@@ -36,10 +48,12 @@ model Company {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  users      User[]
-  contacts   Contact[]
-  campaigns  Campaign[]
-  creditLogs CreditLog[]
+  users         User[]
+  contacts      Contact[]
+  campaigns     Campaign[]
+  creditLogs    CreditLog[]
+  optInSessions OptInSession[]
+  consentEvents ConsentEvent[]
 }
 
 model User {
@@ -59,20 +73,67 @@ model User {
 }
 
 model Contact {
-  id        String   @id @default(uuid())
-  phone     String
-  name      String?
-  consentAt DateTime
-  consentIp String?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id            String   @id @default(uuid())
+  phone         String
+  name          String?
+  consentAt     DateTime
+  consentIp     String?
+  consentSource String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
 
   companyId String
   company   Company @relation(fields: [companyId], references: [id])
 
-  messagesSent CampaignMessage[]
+  messagesSent  CampaignMessage[]
+  consentEvents ConsentEvent[]
 
   @@unique([companyId, phone])
+}
+
+// Estado da conversa de double opt-in por WhatsApp (uma por empresa + telefone).
+model OptInSession {
+  id            String     @id @default(uuid())
+  phone         String
+  channelId     String?
+  state         OptInState @default(awaiting_consent)
+  profileName   String?
+  chosenName    String?
+  lastPromptAt  DateTime?
+  lastInboundId String?
+  // Prova do "SIM" de consentimento (antes de escolher o nome).
+  consentText      String?
+  consentInboundId String?
+  consentAt        DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, phone])
+}
+
+// Registo append-only de consentimento / revogação (prova RGPD/LGPD).
+model ConsentEvent {
+  id                String           @id @default(uuid())
+  phone             String
+  name              String?
+  type              ConsentEventType
+  channel           String           @default("whatsapp")
+  promptText        String?
+  promptVersion     String?
+  replyText         String?
+  inboundMessageId  String?
+  providerTimestamp DateTime?
+  rawPayload        Json?
+  createdAt         DateTime         @default(now())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id])
 }
 
 model Template {
