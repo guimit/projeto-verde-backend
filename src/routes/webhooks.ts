@@ -72,7 +72,12 @@ function parseInboundMessage(body: any): Inbound {
   const channelId = msg?.channelId ?? msg?.channel?.id ?? body?.channelId ?? undefined
 
   const to = String(
-    msg?.receiver?.contacts?.[0]?.identifierValue ?? msg?.to ?? msg?.recipient ?? body?.to ?? ''
+    msg?.receiver?.connector?.identifierValue ??
+      msg?.receiver?.contacts?.[0]?.identifierValue ??
+      msg?.to ??
+      msg?.recipient ??
+      body?.to ??
+      ''
   )
 
   const profileName =
