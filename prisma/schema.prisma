@@ -39,7 +39,6 @@ model Company {
   users      User[]
   contacts   Contact[]
   campaigns  Campaign[]
-  templates  Template[]
   creditLogs CreditLog[]
 }
 
@@ -85,9 +84,6 @@ model Template {
   variables      String[]
   approved       Boolean         @default(false)
   createdAt      DateTime        @default(now())
-
-  companyId String
-  company   Company @relation(fields: [companyId], references: [id])
 
   campaigns Campaign[]
 }
