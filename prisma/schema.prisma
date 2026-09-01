@@ -89,17 +89,18 @@ model Template {
 }
 
 model Campaign {
-  id          String         @id @default(uuid())
-  name        String
-  status      CampaignStatus @default(draft)
-  scheduledAt DateTime?
-  sentAt      DateTime?
-  totalSent   Int            @default(0)
-  totalFailed Int            @default(0)
-  creditsCost Int            @default(0)
-  filters     Json?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  id             String         @id @default(uuid())
+  name           String
+  status         CampaignStatus @default(draft)
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  totalSent      Int            @default(0)
+  totalFailed    Int            @default(0)
+  creditsCost    Int            @default(0)
+  filters        Json?
+  variableValues Json?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
   companyId String
   company   Company @relation(fields: [companyId], references: [id])
