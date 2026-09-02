@@ -13,9 +13,6 @@ import {
 
 const router = Router()
 
-// Um mesmo número recebe o aviso "fora do escopo" / convite no máx. 1x nesta janela.
-const NUDGE_THROTTLE_MS = 6 * 60 * 60 * 1000
-
 function keywords(envValue: string | undefined, fallback: string) {
   return (envValue ?? fallback)
     .split(',')
@@ -165,6 +162,7 @@ router.post('/bird', async (req, res) => {
 
   try {
     const result = await runOptInFlow({ company, phone, text, inbound })
+    console.log('[bird webhook] resultado', { company: company.name, phone, text, ...result })
     return res.status(200).json({ ok: true, ...result })
   } catch (err) {
     console.error('[bird webhook] erro no fluxo de opt-in', err)
@@ -186,11 +184,6 @@ async function runOptInFlow({
   const session = await prisma.optInSession.findUnique({
     where: { companyId_phone: { companyId: company.id, phone } },
   })
-
-  // Throttle do aviso "fora do escopo" enviado a quem já está inscrito.
-  const recentlyNudged =
-    !!session?.lastNudgeAt &&
-    Date.now() - session.lastNudgeAt.getTime() < NUDGE_THROTTLE_MS
 
   // Idempotência: mesma mensagem entregue duas vezes.
   if (
@@ -292,13 +285,9 @@ async function runOptInFlow({
   }
 
   // --- Já confirmado: mensagem fora do fluxo → lembrar que é canal de notificações ---
-  if (!recentlyNudged) {
-    await touch({ lastNudgeAt: new Date() })
-    await send(outOfScope(company.name, company.supportPhone))
-    return { action: 'out_of_scope_notice', state: state ?? null }
-  }
   await touch({})
-  return { action: 'noop', state: state ?? null }
+  await send(outOfScope(company.name, company.supportPhone))
+  return { action: 'out_of_scope_notice', state: state ?? null }
 }
 
 async function finalizeConsent({
