@@ -17,6 +17,37 @@ router.get('/', authenticate, async (req, res) => {
   res.json(contacts)
 })
 
+// GET /api/contacts/deleted — contatos removidos pelo painel a pedido do titular.
+// A linha Contact é apagada, por isso a lista é reconstruída a partir do
+// ConsentEvent final de revogação (channel 'panel'). Marca `rejoined` quando já
+// existe de novo um contato com o mesmo telefone (voltou pelo duplo opt-in).
+router.get('/deleted', authenticate, async (req, res) => {
+  const companyId = getCompanyId(req)
+  const events = await prisma.consentEvent.findMany({
+    where: { companyId, type: 'revoked', channel: 'panel' },
+    orderBy: { createdAt: 'desc' },
+  })
+
+  const phones = [...new Set(events.map((e) => e.phone))]
+  const existing = phones.length
+    ? await prisma.contact.findMany({
+        where: { companyId, phone: { in: phones } },
+        select: { phone: true },
+      })
+    : []
+  const activePhones = new Set(existing.map((c) => c.phone))
+
+  res.json(
+    events.map((e) => ({
+      id: e.id,
+      phone: e.phone,
+      name: e.name,
+      createdAt: e.createdAt,
+      rejoined: activePhones.has(e.phone),
+    }))
+  )
+})
+
 router.get<{ id: string }>('/:id/consent', authenticate, async (req, res) => {
   const companyId = getCompanyId(req)
   const contact = await prisma.contact.findFirst({
