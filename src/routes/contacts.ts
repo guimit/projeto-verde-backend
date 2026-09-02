@@ -53,6 +53,21 @@ router.get('/deleted', authenticate, async (req, res) => {
   res.json(rows)
 })
 
+// GET /api/contacts/consent?phone=... — histórico de consentimento por telefone.
+// Funciona para contatos ativos e removidos (os eventos são mantidos mesmo depois
+// de a linha Contact ser apagada, com contactId a null).
+router.get('/consent', authenticate, async (req, res) => {
+  const companyId = getCompanyId(req)
+  const phone = String(req.query.phone ?? '')
+  if (!phone) return res.status(400).json({ error: 'phone required' })
+
+  const events = await prisma.consentEvent.findMany({
+    where: { companyId, phone },
+    orderBy: { createdAt: 'desc' },
+  })
+  res.json(events)
+})
+
 router.get<{ id: string }>('/:id/consent', authenticate, async (req, res) => {
   const companyId = getCompanyId(req)
   const contact = await prisma.contact.findFirst({
