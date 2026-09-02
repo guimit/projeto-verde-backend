@@ -8,9 +8,13 @@ import {
   welcome,
   optOutAck,
   notUnderstood,
+  outOfScope,
 } from '../lib/consentMessages'
 
 const router = Router()
+
+// Um mesmo número recebe o aviso "fora do escopo" / convite no máx. 1x nesta janela.
+const NUDGE_THROTTLE_MS = 6 * 60 * 60 * 1000
 
 function keywords(envValue: string | undefined, fallback: string) {
   return (envValue ?? fallback)
@@ -173,7 +177,7 @@ async function runOptInFlow({
   text,
   inbound,
 }: {
-  company: { id: string; name: string }
+  company: { id: string; name: string; supportPhone?: string | null }
   phone: string
   text: string
   inbound: Inbound
@@ -181,6 +185,10 @@ async function runOptInFlow({
   const session = await prisma.optInSession.findUnique({
     where: { companyId_phone: { companyId: company.id, phone } },
   })
+
+  const recentlyNudged =
+    !!session?.lastNudgeAt &&
+    Date.now() - session.lastNudgeAt.getTime() < NUDGE_THROTTLE_MS
 
   // Idempotência: mesma mensagem entregue duas vezes.
   if (
@@ -239,16 +247,19 @@ async function runOptInFlow({
 
   const state = session?.state
 
-  // --- Sem sessão (ou já fez opt-out): só arranca com um gatilho de opt-in ---
+  // --- Sem sessão (ou já fez opt-out): qualquer mensagem recebe o convite a inscrever-se ---
   if (!session || state === 'opted_out') {
-    if (!isOptInTrigger) {
-      return { action: 'ignored', reason: 'no opt-in trigger', state: state ?? null }
+    // Já convidado há pouco (só possível com sessão em opted_out): não repetir.
+    if (recentlyNudged && !isOptInTrigger) {
+      await touch({})
+      return { action: 'ignored', reason: 'throttled', state: state ?? null }
     }
     await touch({
       state: 'awaiting_consent',
       channelId: inbound.channelId ?? null,
       profileName: inbound.profileName ?? null,
       lastPromptAt: new Date(),
+      lastNudgeAt: new Date(),
     })
     await send(consentPrompt(company.name))
     return { action: 'consent_prompt_sent', state: 'awaiting_consent' }
@@ -283,7 +294,12 @@ async function runOptInFlow({
     return { action: 'confirmed', state: 'confirmed' }
   }
 
-  // --- Já confirmado: manter registo do último inbound, não fazer nada ---
+  // --- Já confirmado: mensagem fora do fluxo → lembrar que é canal de notificações ---
+  if (!recentlyNudged) {
+    await touch({ lastNudgeAt: new Date() })
+    await send(outOfScope(company.name, company.supportPhone))
+    return { action: 'out_of_scope_notice', state: state ?? null }
+  }
   await touch({})
   return { action: 'noop', state: state ?? null }
 }

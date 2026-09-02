@@ -34,6 +34,14 @@ export function optOutAck(companyName: string) {
   )
 }
 
+// Resposta a quem já está inscrito e manda uma mensagem fora do fluxo de opt-in.
+export function outOfScope(companyName: string, supportPhone?: string | null) {
+  const base = `Este é apenas o nosso canal de notificações de ${companyName}.`
+  return supportPhone && supportPhone.trim()
+    ? `${base} Para falar com um de nossos atendentes, utilize o número ${supportPhone.trim()}.`
+    : `${base} Para outros assuntos, contacte-nos pelos canais habituais.`
+}
+
 export function notUnderstood(companyName: string) {
   return (
     `Não percebi. Para confirmar a inscrição nas comunicações de ${companyName}, ` +

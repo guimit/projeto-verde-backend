@@ -43,6 +43,7 @@ model Company {
   name           String
   whatsappNumber String   @unique
   birdChannelId  String?
+  supportPhone   String?
   active         Boolean  @default(true)
   credits        Int      @default(0)
   createdAt      DateTime @default(now())
@@ -100,6 +101,8 @@ model OptInSession {
   profileName   String?
   chosenName    String?
   lastPromptAt  DateTime?
+  // Último aviso "fora do escopo" / convite a inscrever-se (throttle anti-spam).
+  lastNudgeAt   DateTime?
   lastInboundId String?
   // Prova do "SIM" de consentimento (antes de escolher o nome).
   consentText      String?

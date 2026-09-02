@@ -12,20 +12,30 @@ router.get('/', authenticate, requirePlatformAdmin, async (req, res) => {
 })
 
 router.post('/', authenticate, requirePlatformAdmin, async (req, res) => {
-  const { name, whatsappNumber, birdChannelId } = req.body
+  const { name, whatsappNumber, birdChannelId, supportPhone } = req.body
   const company = await prisma.company.create({
-    data: { name, whatsappNumber, birdChannelId: birdChannelId || null },
+    data: {
+      name,
+      whatsappNumber,
+      birdChannelId: birdChannelId || null,
+      supportPhone: supportPhone || null,
+    },
   })
   res.status(201).json(company)
 })
 
 router.put<{ id: string }>('/:id', authenticate, requirePlatformAdmin, async (req, res) => {
   const { id } = req.params
-  const { name, whatsappNumber, birdChannelId } = req.body
+  const { name, whatsappNumber, birdChannelId, supportPhone } = req.body
   try {
     const company = await prisma.company.update({
       where: { id },
-      data: { name, whatsappNumber, birdChannelId: birdChannelId || null },
+      data: {
+        name,
+        whatsappNumber,
+        birdChannelId: birdChannelId || null,
+        supportPhone: supportPhone || null,
+      },
     })
     res.json(company)
   } catch (err: any) {
