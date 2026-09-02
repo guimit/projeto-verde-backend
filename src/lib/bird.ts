@@ -12,12 +12,7 @@ interface SendResult {
   error?: string
 }
 
-// Faz o POST de uma mensagem já montada (campo `body` da Channels API).
-async function postMessage(
-  channelId: string,
-  toPhone: string,
-  body: unknown
-): Promise<SendResult> {
+async function post(channelId: string, payload: unknown): Promise<SendResult> {
   const workspaceId = process.env.BIRD_WORKSPACE_ID
   const apiKey = process.env.BIRD_API_KEY
 
@@ -31,11 +26,6 @@ async function postMessage(
   }
 
   const url = `${BASE}/workspaces/${workspaceId}/channels/${channelId}/messages`
-  const payload = {
-    receiver: { contacts: [{ identifierValue: toPhone }] },
-    body,
-  }
-
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -70,11 +60,15 @@ export async function sendWhatsAppText(
   toPhone: string,
   text: string
 ): Promise<SendResult> {
-  return postMessage(channelId, toPhone, { type: 'text', text: { text } })
+  return post(channelId, {
+    receiver: { contacts: [{ identifierValue: toPhone }] },
+    body: { type: 'text', text: { text } },
+  })
 }
 
-// Texto com um único botão de link (cta_url): abre `url` ao tocar.
-// Se a API rejeitar o formato interativo, faz fallback para texto simples.
+// Mensagem com um botão de link (cta_url) "Conversar" que abre `url` ao tocar.
+// A Channels API rejeita `body.actions`; tentamos o formato `interactive` e, se
+// também for recusado, mandamos texto simples com o link no fim (tocável no WhatsApp).
 export async function sendWhatsAppCtaUrl(
   channelId: string,
   toPhone: string,
@@ -82,13 +76,19 @@ export async function sendWhatsAppCtaUrl(
   buttonText: string,
   url: string
 ): Promise<SendResult> {
-  const result = await postMessage(channelId, toPhone, {
-    type: 'text',
-    text: { text },
-    actions: [{ type: 'link', link: { text: buttonText, url } }],
+  const interactive = await post(channelId, {
+    receiver: { contacts: [{ identifierValue: toPhone }] },
+    body: {
+      type: 'interactive',
+      interactive: {
+        type: 'cta_url',
+        body_text: text,
+        cta_url: { text: buttonText, url },
+      },
+    },
   })
-  if (result.ok) return result
+  if (interactive.ok) return interactive
 
-  console.warn('[bird] botão cta_url rejeitado — a enviar como texto simples')
-  return sendWhatsAppText(channelId, toPhone, text)
+  console.warn('[bird] cta_url recusado — a enviar texto com o link no fim')
+  return sendWhatsAppText(channelId, toPhone, `${text}\n\n👉 ${url}`)
 }
