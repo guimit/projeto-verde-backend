@@ -23,7 +23,8 @@ function keywords(envValue: string | undefined, fallback: string) {
     .filter(Boolean)
 }
 
-const OPTIN_KEYWORDS = keywords(process.env.OPTIN_KEYWORDS, 'sim,quero,aceito,yes,start,novidades')
+// Qualquer mensagem de um número sem sessão já inicia o fluxo de opt-in, por isso
+// não há mais lista de gatilhos de entrada — só de saída.
 const OPTOUT_KEYWORDS = keywords(process.env.OPTOUT_KEYWORDS, 'sair,parar,stop,cancelar,unsubscribe')
 
 // "sim" isolado (ou no início) — usado para confirmar consentimento / nome.
@@ -186,6 +187,7 @@ async function runOptInFlow({
     where: { companyId_phone: { companyId: company.id, phone } },
   })
 
+  // Throttle do aviso "fora do escopo" enviado a quem já está inscrito.
   const recentlyNudged =
     !!session?.lastNudgeAt &&
     Date.now() - session.lastNudgeAt.getTime() < NUDGE_THROTTLE_MS
@@ -201,7 +203,6 @@ async function runOptInFlow({
 
   const isOptOut = matches(text, OPTOUT_KEYWORDS)
   const isYes = matches(text, YES_KEYWORDS)
-  const isOptInTrigger = matches(text, OPTIN_KEYWORDS)
 
   const send = (msg: string) => sendWhatsAppText(inbound.channelId ?? '', phone, msg)
   const touch = (data: any) =>
@@ -248,18 +249,14 @@ async function runOptInFlow({
   const state = session?.state
 
   // --- Sem sessão (ou já fez opt-out): qualquer mensagem recebe o convite a inscrever-se ---
+  // (a repetição de mensagens neste ponto passa a cair no ramo awaiting_consent, que
+  //  responde com notUnderstood — não precisamos de throttle aqui.)
   if (!session || state === 'opted_out') {
-    // Já convidado há pouco (só possível com sessão em opted_out): não repetir.
-    if (recentlyNudged && !isOptInTrigger) {
-      await touch({})
-      return { action: 'ignored', reason: 'throttled', state: state ?? null }
-    }
     await touch({
       state: 'awaiting_consent',
       channelId: inbound.channelId ?? null,
       profileName: inbound.profileName ?? null,
       lastPromptAt: new Date(),
-      lastNudgeAt: new Date(),
     })
     await send(consentPrompt(company.name))
     return { action: 'consent_prompt_sent', state: 'awaiting_consent' }
