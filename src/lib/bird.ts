@@ -66,29 +66,30 @@ export async function sendWhatsAppText(
   })
 }
 
-// Mensagem com um botão de link (cta_url) "Conversar" que abre `url` ao tocar.
-// A Channels API rejeita `body.actions`; tentamos o formato `interactive` e, se
-// também for recusado, mandamos texto simples com o link no fim (tocável no WhatsApp).
-export async function sendWhatsAppCtaUrl(
+// Envia um template de mensagem já publicado no Bird Studio (Project + versão).
+// As variáveis são nomeadas (ex.: "numero_whatsapp"), não posicionais.
+export async function sendWhatsAppTemplate(
   channelId: string,
   toPhone: string,
-  text: string,
-  buttonText: string,
-  url: string
+  opts: {
+    projectId: string
+    version?: string
+    locale?: string
+    variables?: Record<string, string>
+  }
 ): Promise<SendResult> {
-  const interactive = await post(channelId, {
+  const parameters = Object.entries(opts.variables ?? {}).map(([key, value]) => ({
+    type: 'string',
+    key,
+    value,
+  }))
+  return post(channelId, {
     receiver: { contacts: [{ identifierValue: toPhone }] },
-    body: {
-      type: 'interactive',
-      interactive: {
-        type: 'cta_url',
-        body_text: text,
-        cta_url: { text: buttonText, url },
-      },
+    template: {
+      projectId: opts.projectId,
+      ...(opts.version ? { version: opts.version } : {}),
+      locale: opts.locale ?? 'pt_BR',
+      parameters,
     },
   })
-  if (interactive.ok) return interactive
-
-  console.warn('[bird] cta_url recusado — a enviar texto com o link no fim')
-  return sendWhatsAppText(channelId, toPhone, `${text}\n\n👉 ${url}`)
 }

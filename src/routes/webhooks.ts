@@ -1,6 +1,18 @@
 import { Router } from 'express'
 import { prisma } from '../utils/prisma'
-import { sendWhatsAppText, sendWhatsAppCtaUrl } from '../lib/bird'
+import { sendWhatsAppText, sendWhatsAppTemplate } from '../lib/bird'
+
+// Template publicado no Bird Studio para o aviso "fora do escopo" (com botão
+// "Conversar" que abre wa.me/<numero_whatsapp>). Override por env se mudar.
+const OUT_OF_SCOPE_TEMPLATE = {
+  projectId:
+    process.env.BIRD_OUT_OF_SCOPE_TEMPLATE_PROJECT_ID ??
+    '63e6e41e-f0ff-4fa8-94ff-d45a500ee3be',
+  version:
+    process.env.BIRD_OUT_OF_SCOPE_TEMPLATE_VERSION ??
+    '2e7168d2-a565-4662-a1be-1d7fc8504f81',
+  locale: process.env.BIRD_OUT_OF_SCOPE_TEMPLATE_LOCALE ?? 'pt_BR',
+}
 import {
   CONSENT_PROMPT_VERSION,
   consentPrompt,
@@ -286,20 +298,27 @@ async function runOptInFlow({
 
   // --- Já confirmado: mensagem fora do fluxo → lembrar que é canal de notificações ---
   await touch({})
-  const notice = outOfScope(company.name, company.supportPhone)
   const supportDigits = (company.supportPhone ?? '').replace(/\D/g, '')
+  const ch = inbound.channelId ?? ''
+
+  // 1ª opção: template aprovado com o botão "Conversar".
+  let sent = { ok: false } as { ok: boolean }
   if (supportDigits) {
-    // Botão "Conversar" que abre a conversa de WhatsApp com o número de atendimento.
-    await sendWhatsAppCtaUrl(
-      inbound.channelId ?? '',
-      phone,
-      notice,
-      'Conversar',
-      `https://wa.me/${supportDigits}`
-    )
-  } else {
-    await send(notice)
+    sent = await sendWhatsAppTemplate(ch, phone, {
+      projectId: OUT_OF_SCOPE_TEMPLATE.projectId,
+      version: OUT_OF_SCOPE_TEMPLATE.version,
+      locale: OUT_OF_SCOPE_TEMPLATE.locale,
+      variables: { numero_whatsapp: supportDigits },
+    })
   }
+
+  // Fallback: texto simples com o link wa.me no fim (tocável no WhatsApp).
+  if (!sent.ok) {
+    if (supportDigits) console.warn('[bird] template recusado — fallback para texto')
+    const suffix = supportDigits ? `\n\n👉 https://wa.me/${supportDigits}` : ''
+    await send(outOfScope(company.name, company.supportPhone) + suffix)
+  }
+
   return { action: 'out_of_scope_notice', state: state ?? null }
 }
 
