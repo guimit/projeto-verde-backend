@@ -17,35 +17,40 @@ router.get('/', authenticate, async (req, res) => {
   res.json(contacts)
 })
 
-// GET /api/contacts/deleted — contatos removidos pelo painel a pedido do titular.
-// A linha Contact é apagada, por isso a lista é reconstruída a partir do
-// ConsentEvent final de revogação (channel 'panel'). Marca `rejoined` quando já
-// existe de novo um contato com o mesmo telefone (voltou pelo duplo opt-in).
+// GET /api/contacts/deleted — contatos que saíram da lista, por duas vias:
+//  - 'panel': removidos pelo painel a pedido do titular (a linha Contact é apagada);
+//  - 'whatsapp_optout': opt-out por WhatsApp ("sair"/"parar").
+// Ambas registam um ConsentEvent `revoked`, que é a fonte da lista. Fica um registo
+// por telefone (o mais recente). `rejoined` marca quem já tem de novo um contato ativo.
 router.get('/deleted', authenticate, async (req, res) => {
   const companyId = getCompanyId(req)
   const events = await prisma.consentEvent.findMany({
-    where: { companyId, type: 'revoked', channel: 'panel' },
+    where: { companyId, type: 'revoked' },
     orderBy: { createdAt: 'desc' },
   })
 
-  const phones = [...new Set(events.map((e) => e.phone))]
-  const existing = phones.length
-    ? await prisma.contact.findMany({
-        where: { companyId, phone: { in: phones } },
-        select: { phone: true },
-      })
-    : []
-  const activePhones = new Set(existing.map((c) => c.phone))
+  const activeContacts = await prisma.contact.findMany({
+    where: { companyId, active: true },
+    select: { phone: true },
+  })
+  const activePhones = new Set(activeContacts.map((c) => c.phone))
 
-  res.json(
-    events.map((e) => ({
+  const seen = new Set<string>()
+  const rows = []
+  for (const e of events) {
+    if (seen.has(e.phone)) continue
+    seen.add(e.phone)
+    rows.push({
       id: e.id,
       phone: e.phone,
       name: e.name,
       createdAt: e.createdAt,
+      source: e.channel === 'panel' ? 'panel' : 'whatsapp_optout',
       rejoined: activePhones.has(e.phone),
-    }))
-  )
+    })
+  }
+
+  res.json(rows)
 })
 
 router.get<{ id: string }>('/:id/consent', authenticate, async (req, res) => {
