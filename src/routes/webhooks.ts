@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { prisma } from '../utils/prisma'
-import { sendWhatsAppText } from '../lib/bird'
+import { sendWhatsAppText, sendWhatsAppCtaUrl } from '../lib/bird'
 import {
   CONSENT_PROMPT_VERSION,
   consentPrompt,
@@ -286,7 +286,20 @@ async function runOptInFlow({
 
   // --- Já confirmado: mensagem fora do fluxo → lembrar que é canal de notificações ---
   await touch({})
-  await send(outOfScope(company.name, company.supportPhone))
+  const notice = outOfScope(company.name, company.supportPhone)
+  const supportDigits = (company.supportPhone ?? '').replace(/\D/g, '')
+  if (supportDigits) {
+    // Botão "Conversar" que abre a conversa de WhatsApp com o número de atendimento.
+    await sendWhatsAppCtaUrl(
+      inbound.channelId ?? '',
+      phone,
+      notice,
+      'Conversar',
+      `https://wa.me/${supportDigits}`
+    )
+  } else {
+    await send(notice)
+  }
   return { action: 'out_of_scope_notice', state: state ?? null }
 }
 
