@@ -68,6 +68,93 @@ router.get('/consent', authenticate, async (req, res) => {
   res.json(events)
 })
 
+// GET /api/contacts/timeline?phone=... — tudo o que aconteceu com um telefone:
+// eventos de consentimento (dado/revogado) + campanhas enviadas + criação do contato.
+// Ordenado do mais recente para o mais antigo. Funciona para contatos ativos,
+// em opt-out e removidos pelo painel (para estes as campanhas já não existem).
+router.get('/timeline', authenticate, async (req, res) => {
+  const companyId = getCompanyId(req)
+  const phone = String(req.query.phone ?? '')
+  if (!phone) return res.status(400).json({ error: 'phone required' })
+
+  const [contact, consentEvents] = await Promise.all([
+    prisma.contact.findFirst({ where: { companyId, phone } }),
+    prisma.consentEvent.findMany({
+      where: { companyId, phone },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ])
+
+  const events: Array<{
+    id: string
+    at: Date
+    kind: 'consent_granted' | 'consent_revoked' | 'campaign' | 'contact_created'
+    title: string
+    detail?: string | null
+    channel?: string | null
+    status?: string | null
+  }> = []
+
+  for (const e of consentEvents) {
+    events.push({
+      id: `consent:${e.id}`,
+      at: e.createdAt,
+      kind: e.type === 'granted' ? 'consent_granted' : 'consent_revoked',
+      title: e.type === 'granted' ? 'Consentimento dado' : 'Consentimento revogado',
+      detail: e.replyText ?? null,
+      channel: e.channel,
+    })
+  }
+
+  if (contact) {
+    events.push({
+      id: `contact:${contact.id}`,
+      at: contact.createdAt,
+      kind: 'contact_created',
+      title: 'Contato criado',
+      detail: contact.consentSource ?? null,
+    })
+
+    const messages = await prisma.campaignMessage.findMany({
+      where: { contactId: contact.id },
+      include: {
+        campaign: {
+          select: { name: true, template: { select: { name: true } } },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    })
+    for (const m of messages) {
+      events.push({
+        id: `msg:${m.id}`,
+        at: m.sentAt ?? m.updatedAt,
+        kind: 'campaign',
+        title: `Campanha "${m.campaign.name}"`,
+        detail: m.campaign.template?.name ?? null,
+        status: m.status,
+      })
+    }
+  }
+
+  events.sort((a, b) => b.at.getTime() - a.at.getTime())
+
+  res.json({
+    contact: contact
+      ? {
+          id: contact.id,
+          name: contact.name,
+          phone: contact.phone,
+          consentAt: contact.consentAt,
+          consentSource: contact.consentSource,
+          active: contact.active,
+          createdAt: contact.createdAt,
+        }
+      : null,
+    phone,
+    events,
+  })
+})
+
 router.get<{ id: string }>('/:id/consent', authenticate, async (req, res) => {
   const companyId = getCompanyId(req)
   const contact = await prisma.contact.findFirst({
