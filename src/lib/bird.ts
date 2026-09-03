@@ -60,6 +60,7 @@ async function post(channelId: string, payload: unknown): Promise<SendResult> {
   }
 
   const url = `${BASE}/workspaces/${workspaceId}/channels/${channelId}/messages`
+  console.log('[bird] POST', url, JSON.stringify(payload))
   try {
     const res = await fetch(url, {
       method: 'POST',
