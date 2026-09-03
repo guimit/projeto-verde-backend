@@ -3,7 +3,35 @@
 // (api.bird.com + workspace). Confirmar com a doc e afinar com a 1ª resposta real
 // registada nos logs.
 
+import { PUBLIC_URL } from './r2'
+
 const BASE = process.env.BIRD_API_BASE ?? 'https://api.bird.com'
+
+// Colapsa uma base duplicada: "https://a/https://b/key" -> "https://b/key".
+function collapseDoubledBase(s: string): string {
+  const m = s.match(/^https?:\/\/[^\s]+?\/(https?:\/\/.+)$/i)
+  return m ? m[1] : s
+}
+
+// Botões de URL no Bird têm o prefixo do link fixo e só recebem o sufixo pela
+// variável — mandamos só a parte a seguir à base pública.
+function stripPublicBase(value: string): string {
+  let s = collapseDoubledBase(value.trim())
+  if (PUBLIC_URL && s.startsWith(PUBLIC_URL + '/')) return s.slice(PUBLIC_URL.length + 1)
+  return s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev\//i, '')
+}
+
+const IMAGE_EXT = /\.(png|jpe?g|webp|gif)(\?|$)/i
+
+// A media do cabeçalho quer o URL completo; os botões de URL querem só o sufixo.
+function paramValue(value: string): string {
+  const s = collapseDoubledBase(value.trim())
+  if (IMAGE_EXT.test(s)) {
+    // Normaliza o domínio de dev antigo para a base pública atual.
+    return PUBLIC_URL ? s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev/i, PUBLIC_URL) : s
+  }
+  return stripPublicBase(s)
+}
 
 interface SendResult {
   ok: boolean
@@ -82,7 +110,7 @@ export async function sendWhatsAppTemplate(
 ): Promise<SendResult> {
   const parameters = Object.entries(opts.variables ?? {})
     .filter(([, value]) => value != null && value !== '')
-    .map(([key, value]) => ({ type: 'string', key, value }))
+    .map(([key, value]) => ({ type: 'string', key, value: paramValue(value) }))
   return post(channelId, {
     receiver: { contacts: [{ identifierValue: toPhone }] },
     template: {

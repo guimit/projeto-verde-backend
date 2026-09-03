@@ -9,7 +9,16 @@ const ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID
 const SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY
 
 export const BUCKET = process.env.R2_BUCKET_NAME ?? 'projeto-verde'
-export const PUBLIC_URL = (process.env.R2_PUBLIC_URL ?? '').replace(/\/+$/, '')
+
+// Aceita só a base pública. Se a env vier com dois URLs colados
+// ("https://a/https://b"), fica com o último; tira barras finais.
+function normalizeBase(raw: string | undefined): string {
+  const v = (raw ?? '').trim().replace(/\/+$/, '')
+  const last = v.lastIndexOf('https://')
+  return (last > 0 ? v.slice(last) : v).replace(/\/+$/, '')
+}
+
+export const PUBLIC_URL = normalizeBase(process.env.R2_PUBLIC_URL)
 
 // Configuração incompleta é um erro de arranque explícito (mesmo padrão do bird.ts,
 // mas aqui o upload não tem fallback silencioso possível).
@@ -42,7 +51,9 @@ export function buildKey(scope: string, filename: string): string {
 }
 
 export function publicUrlFor(key: string): string {
-  return `${PUBLIC_URL}/${key}`
+  // Se por engano vier um URL completo, devolve-o tal como está.
+  if (/^https?:\/\//i.test(key)) return key
+  return `${PUBLIC_URL}/${key.replace(/^\/+/, '')}`
 }
 
 export async function deleteFromR2(key: string): Promise<void> {
