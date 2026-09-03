@@ -26,6 +26,20 @@ enum MessageCategory {
   utility
 }
 
+enum TemplateStatus {
+  draft
+  pending
+  approved
+  rejected
+  paused
+}
+
+enum TemplateHeaderType {
+  none
+  text
+  image
+}
+
 enum OptInState {
   awaiting_consent
   awaiting_name
@@ -55,6 +69,7 @@ model Company {
   creditLogs    CreditLog[]
   optInSessions OptInSession[]
   consentEvents ConsentEvent[]
+  uploads       Upload[]
 }
 
 model User {
@@ -71,6 +86,7 @@ model User {
   company   Company? @relation(fields: [companyId], references: [id])
 
   impersonationLogs ImpersonationLog[]
+  templatesApproved Template[]
 }
 
 model Contact {
@@ -140,14 +156,33 @@ model ConsentEvent {
 }
 
 model Template {
-  id             String          @id @default(uuid())
-  name           String
-  birdTemplateId String?
-  category       MessageCategory
+  id       String          @id @default(uuid())
+  name     String
+  category MessageCategory
+  language String          @default("pt_BR") // locale Bird (ex.: pt_BR)
+  channel  String          @default("whatsapp")
+
+  // Ligação ao template já criado/aprovado no Bird Studio (colado à mão pelo admin).
+  birdProjectId String?
+  birdVersionId String?
+  birdWabaId    String?
+
+  headerType     TemplateHeaderType @default(none)
+  headerText     String?
+  headerMediaUrl String? // URL pública R2 (imagem/pdf de amostra do cabeçalho)
   bodyText       String
+  footerText     String?
+  buttons        Json? // [{ type: 'url' | 'quick_reply', text, url? }]
   variables      String[]
-  approved       Boolean         @default(false)
-  createdAt      DateTime        @default(now())
+
+  status          TemplateStatus @default(draft)
+  rejectionReason String?
+  approvedAt      DateTime?
+  approvedById    String?
+  approvedBy      User?          @relation(fields: [approvedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   campaigns Campaign[]
 }
@@ -208,4 +243,19 @@ model ImpersonationLog {
 
   adminId String
   admin   User   @relation(fields: [adminId], references: [id])
+}
+
+// Ficheiro (imagem/PDF) carregado para o Cloudflare R2.
+// companyId nulo = asset da plataforma (upload do platform_admin para um template).
+model Upload {
+  id        String   @id @default(uuid())
+  companyId String?
+  filename  String // nome original do ficheiro
+  key       String // chave completa no R2
+  url       String // R2_PUBLIC_URL + "/" + key
+  mimeType  String // image/png | image/jpeg | application/pdf
+  size      Int // bytes
+  createdAt DateTime @default(now())
+
+  company Company? @relation(fields: [companyId], references: [id])
 }

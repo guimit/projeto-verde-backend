@@ -26,6 +26,15 @@ async function resolveAudience(companyId: string, filters: unknown) {
   })
 }
 
+// Campaigns can only use templates the Verde team has approved.
+async function assertTemplateApproved(templateId: string): Promise<string | null> {
+  if (!templateId) return 'templateId é obrigatório'
+  const template = await prisma.template.findUnique({ where: { id: templateId } })
+  if (!template) return 'Template não encontrado'
+  if (template.status !== 'approved') return 'Template não está aprovado'
+  return null
+}
+
 // A variable can be a fixed string typed by the sender, or bound to a field on
 // the contact it's being sent to (so "{nome}" becomes that contact's own name).
 interface VariableBinding {
@@ -64,6 +73,8 @@ router.get('/', authenticate, async (req, res) => {
 router.post('/', authenticate, async (req, res) => {
   const companyId = getCompanyId(req)
   const { name, templateId, scheduledAt, filters, variableValues } = req.body
+  const templateError = await assertTemplateApproved(templateId)
+  if (templateError) return res.status(400).json({ error: templateError })
   const campaign = await prisma.campaign.create({
     data: {
       companyId,
@@ -99,6 +110,8 @@ router.put<{ id: string }>('/:id', authenticate, async (req, res) => {
   }
 
   const { name, templateId, scheduledAt, filters, variableValues } = req.body
+  const templateError = await assertTemplateApproved(templateId)
+  if (templateError) return res.status(400).json({ error: templateError })
   const campaign = await prisma.campaign.update({
     where: { id: existing.id },
     data: {

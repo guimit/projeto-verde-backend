@@ -7,6 +7,7 @@ import companyRoutes from './routes/companies'
 import contactRoutes from './routes/contacts'
 import campaignRoutes from './routes/campaigns'
 import templateRoutes from './routes/templates'
+import uploadRoutes from './routes/uploads'
 import creditRoutes from './routes/credits'
 import adminRoutes from './routes/admin'
 import webhookRoutes from './routes/webhooks'
@@ -24,6 +25,7 @@ app.use('/api/companies', companyRoutes)
 app.use('/api/contacts', contactRoutes)
 app.use('/api/campaigns', campaignRoutes)
 app.use('/api/templates', templateRoutes)
+app.use('/api/uploads', uploadRoutes)
 app.use('/api/credits', creditRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/webhooks', webhookRoutes)
