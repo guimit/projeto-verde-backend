@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { authenticate } from '../middleware/auth'
 import { prisma } from '../utils/prisma'
+import { sendWhatsAppTemplate } from '../lib/bird'
 
 const router = Router()
 
@@ -58,6 +59,29 @@ function renderMessage(
     if (binding.source === 'contact_phone') return contact?.phone || match
     return binding.value || match
   })
+}
+
+// Resolve os valores das variáveis do template para um contacto concreto, no
+// formato { nome: "Ana", imagem: "https://…" } que o Bird espera (named params).
+function resolveVariables(
+  templateVars: string[],
+  variableValues: unknown,
+  contact: { name?: string | null; phone: string }
+): Record<string, string> {
+  const bindings = (variableValues ?? {}) as Record<string, VariableBinding>
+  const out: Record<string, string> = {}
+  for (const key of templateVars) {
+    const b = bindings[key]
+    if (!b) continue
+    if (b.source === 'contact_name') {
+      if (contact.name) out[key] = contact.name
+    } else if (b.source === 'contact_phone') {
+      out[key] = contact.phone
+    } else if (b.value) {
+      out[key] = b.value
+    }
+  }
+  return out
 }
 
 router.get('/', authenticate, async (req, res) => {
@@ -162,12 +186,13 @@ router.post<{ id: string }>('/:id/cancel-schedule', authenticate, async (req, re
   res.json(updated)
 })
 
-// No Bird.com integration yet — sends are simulated locally: messages are
-// recorded as sent and credits are deducted, but nothing leaves the app.
+// Envia a campanha via Bird.com (WhatsApp). Uma chamada por contacto, sequencial.
+// Os créditos só são debitados pelas mensagens efetivamente aceites pelo Bird.
 router.post<{ id: string }>('/:id/send', authenticate, async (req, res) => {
   const companyId = getCompanyId(req)
   const campaign = await prisma.campaign.findFirst({
     where: { id: req.params.id, companyId },
+    include: { template: true },
   })
   if (!campaign) return res.status(404).json({ error: 'Not found' })
   if (campaign.status === 'done' || campaign.status === 'sending') {
@@ -180,6 +205,20 @@ router.post<{ id: string }>('/:id/send', authenticate, async (req, res) => {
     return res.status(400).json({ error: 'Sem créditos disponíveis' })
   }
 
+  if (!process.env.BIRD_API_KEY || !process.env.BIRD_WORKSPACE_ID) {
+    return res
+      .status(400)
+      .json({ error: 'Integração Bird não configurada (BIRD_API_KEY / BIRD_WORKSPACE_ID)' })
+  }
+  if (!company.birdChannelId) {
+    return res.status(400).json({ error: 'Empresa sem canal WhatsApp do Bird (birdChannelId)' })
+  }
+  if (!campaign.template.birdProjectId) {
+    return res
+      .status(400)
+      .json({ error: 'Template sem Project ID do Bird — não pode ser enviado' })
+  }
+
   const audience = await resolveAudience(companyId, campaign.filters)
   if (audience.length === 0) {
     return res.status(400).json({ error: 'A audiência desta campanha está vazia' })
@@ -188,25 +227,56 @@ router.post<{ id: string }>('/:id/send', authenticate, async (req, res) => {
   const toSend = audience.slice(0, company.credits)
   const shortfall = audience.length - toSend.length
 
-  const updated = await prisma.$transaction(async (tx) => {
-    await tx.campaignMessage.createMany({
-      data: toSend.map((c) => ({
-        campaignId: campaign.id,
-        contactId: c.id,
-        status: 'sent',
-        sentAt: new Date(),
-      })),
-    })
+  await prisma.campaign.update({ where: { id: campaign.id }, data: { status: 'sending' } })
 
+  let sent = 0
+  let failed = 0
+  let firstError: string | undefined
+  for (const contact of toSend) {
+    const variables = resolveVariables(
+      campaign.template.variables,
+      campaign.variableValues,
+      contact
+    )
+    const result = await sendWhatsAppTemplate(company.birdChannelId, contact.phone, {
+      projectId: campaign.template.birdProjectId,
+      version: campaign.template.birdVersionId ?? undefined,
+      locale: campaign.template.language,
+      variables,
+    })
+    await prisma.campaignMessage.create({
+      data: {
+        campaignId: campaign.id,
+        contactId: contact.id,
+        status: result.ok ? 'sent' : 'failed',
+        birdMessageId: result.id,
+        sentAt: result.ok ? new Date() : null,
+      },
+    })
+    if (result.ok) sent++
+    else {
+      failed++
+      if (!firstError) firstError = result.error
+    }
+  }
+
+  if (sent === 0) {
+    await prisma.campaign.update({ where: { id: campaign.id }, data: { status: 'draft' } })
+    return res
+      .status(502)
+      .json({ error: `Nenhuma mensagem enviada. Bird: ${firstError ?? 'erro desconhecido'}` })
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
     const updatedCompany = await tx.company.update({
       where: { id: companyId },
-      data: { credits: { decrement: toSend.length } },
+      data: { credits: { decrement: sent } },
     })
 
     await tx.creditLog.create({
       data: {
         companyId,
-        amount: -toSend.length,
+        amount: -sent,
         description: `Campanha "${campaign.name}"`,
         balanceAfter: updatedCompany.credits,
       },
@@ -217,18 +287,19 @@ router.post<{ id: string }>('/:id/send', authenticate, async (req, res) => {
       data: {
         status: 'done',
         sentAt: new Date(),
-        totalSent: toSend.length,
-        totalFailed: shortfall,
-        creditsCost: toSend.length,
+        totalSent: sent,
+        totalFailed: failed + shortfall,
+        creditsCost: sent,
       },
       include: { template: { select: { name: true } } },
     })
   })
 
-  res.json(updated)
+  res.json({ ...updated, summary: { sent, failed, shortfall } })
 })
 
-// Test sends don't touch the real audience, credits or campaign status.
+// Test sends don't touch the real audience, credits or campaign status — but they
+// do hit Bird for real, so the tester actually receives the WhatsApp message.
 router.post<{ id: string }>('/:id/test', authenticate, async (req, res) => {
   const companyId = getCompanyId(req)
   const campaign = await prisma.campaign.findFirst({
@@ -248,7 +319,33 @@ router.post<{ id: string }>('/:id/test', authenticate, async (req, res) => {
     campaign.variableValues,
     contact ?? undefined
   )
-  res.json({ ok: true, phone, preview })
+
+  const company = await prisma.company.findUnique({ where: { id: companyId } })
+  if (!company?.birdChannelId || !campaign.template.birdProjectId || !process.env.BIRD_API_KEY) {
+    return res.json({
+      ok: true,
+      phone,
+      preview,
+      sent: false,
+      note: 'Envio real indisponível (canal Bird / Project ID em falta) — só pré-visualização.',
+    })
+  }
+
+  const variables = resolveVariables(
+    campaign.template.variables,
+    campaign.variableValues,
+    contact ?? { phone }
+  )
+  const result = await sendWhatsAppTemplate(company.birdChannelId, phone, {
+    projectId: campaign.template.birdProjectId,
+    version: campaign.template.birdVersionId ?? undefined,
+    locale: campaign.template.language,
+    variables,
+  })
+  if (!result.ok) {
+    return res.status(502).json({ error: `Falha no teste. Bird: ${result.error ?? 'erro'}` })
+  }
+  res.json({ ok: true, phone, preview, sent: true, birdMessageId: result.id })
 })
 
 export default router
