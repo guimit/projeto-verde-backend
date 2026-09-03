@@ -167,10 +167,11 @@ model Template {
   birdVersionId String?
   birdWabaId    String?
 
-  headerType     TemplateHeaderType @default(none)
-  headerText     String?
-  headerMediaUrl String? // URL pública R2 (imagem/pdf de amostra do cabeçalho)
-  bodyText       String
+  // O tipo de cabeçalho é definido pelo admin; quando é 'image', a imagem em si
+  // é carregada pelo cliente na campanha (ligada a uma variável), nunca aqui.
+  headerType TemplateHeaderType @default(none)
+  headerText String?
+  bodyText   String
   footerText     String?
   buttons        Json? // [{ type: 'url' | 'quick_reply', text, url? }]
   variables      String[]
