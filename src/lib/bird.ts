@@ -12,12 +12,19 @@ const BASE = process.env.BIRD_API_BASE ?? 'https://api.bird.com'
 // sufixo pela variável. Enviamos por isso só a parte a seguir à base pública —
 // não o URL completo, senão o Bird duplica o domínio.
 function stripPublicBase(value: string): string {
-  const s = value.trim()
-  if (PUBLIC_URL && s.startsWith(PUBLIC_URL + '/')) {
-    return s.slice(PUBLIC_URL.length + 1)
+  let s = value.trim()
+  // Repete para apanhar valores com a base duplicada
+  // ("https://storage.../https://pub-....r2.dev/key").
+  for (let i = 0; i < 3; i++) {
+    if (PUBLIC_URL && s.startsWith(PUBLIC_URL + '/')) {
+      s = s.slice(PUBLIC_URL.length + 1)
+      continue
+    }
+    const stripped = s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev\//i, '')
+    if (stripped === s) break
+    s = stripped
   }
-  // Uploads antigos guardados com o domínio de dev do R2.
-  return s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev\//i, '')
+  return s
 }
 
 interface SendResult {
