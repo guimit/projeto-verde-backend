@@ -23,14 +23,20 @@ function stripPublicBase(value: string): string {
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif)(\?|$)/i
 
-// A media do cabeçalho quer o URL completo; os botões de URL querem só o sufixo.
-function paramValue(value: string): string {
-  const s = collapseDoubledBase(value.trim())
+// Monta um parâmetro do template Bird a partir do nome + valor da variável:
+// - valor com extensão de imagem -> parâmetro de media do cabeçalho
+//   ({ type: 'image', url: <URL completo> }); o Bird encaminha-o para o header
+//   em vez de o contar como parâmetro de corpo.
+// - restantes URLs de storage (PDF/botão) -> só o sufixo, o resto do template
+//   (prefixo do botão) já está fixo no Bird Studio.
+// - texto normal -> string tal como está.
+function toParameter(key: string, raw: string): Record<string, string> {
+  const s = collapseDoubledBase(raw.trim())
   if (IMAGE_EXT.test(s)) {
-    // Normaliza o domínio de dev antigo para a base pública atual.
-    return PUBLIC_URL ? s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev/i, PUBLIC_URL) : s
+    const url = PUBLIC_URL ? s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev/i, PUBLIC_URL) : s
+    return { type: 'image', key, url }
   }
-  return stripPublicBase(s)
+  return { type: 'string', key, value: stripPublicBase(s) }
 }
 
 interface SendResult {
@@ -110,7 +116,7 @@ export async function sendWhatsAppTemplate(
 ): Promise<SendResult> {
   const parameters = Object.entries(opts.variables ?? {})
     .filter(([, value]) => value != null && value !== '')
-    .map(([key, value]) => ({ type: 'string', key, value: paramValue(value) }))
+    .map(([key, value]) => toParameter(key, value))
   return post(channelId, {
     receiver: { contacts: [{ identifierValue: toPhone }] },
     template: {
