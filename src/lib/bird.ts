@@ -3,7 +3,22 @@
 // (api.bird.com + workspace). Confirmar com a doc e afinar com a 1ª resposta real
 // registada nos logs.
 
+import { PUBLIC_URL } from './r2'
+
 const BASE = process.env.BIRD_API_BASE ?? 'https://api.bird.com'
+
+// Nos templates do Bird, os botões de URL (e headers configurados assim) têm o
+// prefixo do link fixo (ex.: "https://storage.passaros.online/") e só recebem o
+// sufixo pela variável. Enviamos por isso só a parte a seguir à base pública —
+// não o URL completo, senão o Bird duplica o domínio.
+function stripPublicBase(value: string): string {
+  const s = value.trim()
+  if (PUBLIC_URL && s.startsWith(PUBLIC_URL + '/')) {
+    return s.slice(PUBLIC_URL.length + 1)
+  }
+  // Uploads antigos guardados com o domínio de dev do R2.
+  return s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev\//i, '')
+}
 
 interface SendResult {
   ok: boolean
@@ -82,7 +97,7 @@ export async function sendWhatsAppTemplate(
 ): Promise<SendResult> {
   const parameters = Object.entries(opts.variables ?? {})
     .filter(([, value]) => value != null && value !== '')
-    .map(([key, value]) => ({ type: 'string', key, value }))
+    .map(([key, value]) => ({ type: 'string', key, value: stripPublicBase(value) }))
   return post(channelId, {
     receiver: { contacts: [{ identifierValue: toPhone }] },
     template: {
