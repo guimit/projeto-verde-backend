@@ -42,7 +42,6 @@ function templateData(body: any) {
     birdWabaId: body.birdWabaId || null,
     headerType,
     headerText: headerType === 'text' ? body.headerText || null : null,
-    headerMediaUrl: headerType === 'image' ? body.headerMediaUrl || null : null,
     bodyText: body.bodyText,
     footerText: body.footerText || null,
     buttons,
