@@ -66,6 +66,20 @@ export async function sendWhatsAppText(
   })
 }
 
+// Um valor de variável que é um URL de imagem/PDF é enviado como parâmetro de
+// media (cabeçalho); o resto vai como string. Os nomes têm de bater certo com os
+// declarados no template do Bird Studio, senão devolve 422 (ParameterMismatch).
+function toParameter(key: string, value: string) {
+  const url = value.trim()
+  if (/^https?:\/\/\S+\.(png|jpe?g|webp|gif)(\?\S*)?$/i.test(url)) {
+    return { type: 'image', key, value: url }
+  }
+  if (/^https?:\/\/\S+\.pdf(\?\S*)?$/i.test(url)) {
+    return { type: 'document', key, value: url }
+  }
+  return { type: 'string', key, value }
+}
+
 // Envia um template de mensagem já publicado no Bird Studio (Project + versão).
 // As variáveis são nomeadas (ex.: "numero_whatsapp"), não posicionais.
 export async function sendWhatsAppTemplate(
@@ -78,11 +92,9 @@ export async function sendWhatsAppTemplate(
     variables?: Record<string, string>
   }
 ): Promise<SendResult> {
-  const parameters = Object.entries(opts.variables ?? {}).map(([key, value]) => ({
-    type: 'string',
-    key,
-    value,
-  }))
+  const parameters = Object.entries(opts.variables ?? {})
+    .filter(([, value]) => value != null && value !== '')
+    .map(([key, value]) => toParameter(key, value))
   return post(channelId, {
     receiver: { contacts: [{ identifierValue: toPhone }] },
     template: {
