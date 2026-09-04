@@ -214,8 +214,13 @@ model Campaign {
 model CampaignMessage {
   id            String    @id @default(uuid())
   birdMessageId String?
+  // pending | sent | delivered | read | failed
   status        String    @default("pending")
   sentAt        DateTime?
+  deliveredAt   DateTime?
+  readAt        DateTime?
+  failedAt      DateTime?
+  failReason    String?
   updatedAt     DateTime  @updatedAt
 
   campaignId String

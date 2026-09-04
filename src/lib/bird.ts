@@ -42,7 +42,8 @@ function toParameter(key: string, raw: string): Record<string, string> {
 interface SendResult {
   ok: boolean
   status?: number
-  id?: string
+  // ID da mensagem criada na Bird — necessário para correlacionar os status updates.
+  messageId?: string
   error?: string
 }
 
@@ -77,20 +78,22 @@ async function post(channelId: string, payload: unknown): Promise<SendResult> {
       return { ok: false, status: res.status, error: raw }
     }
 
-    let id: string | undefined
+    let messageId: string | undefined
     try {
-      id = JSON.parse(raw)?.id
+      messageId = JSON.parse(raw)?.id
     } catch {
       /* corpo não-JSON */
     }
-    return { ok: true, status: res.status, id }
+    return { ok: true, status: res.status, messageId }
   } catch (err) {
     console.error('[bird] erro de rede no envio', err)
     return { ok: false, error: (err as Error).message }
   }
 }
 
-export async function sendWhatsAppText(
+// Envia uma mensagem de texto simples (sem template). Usado no envio de teste de
+// campanha e nas respostas do fluxo de opt-in.
+export async function sendWhatsAppTextMessage(
   channelId: string,
   toPhone: string,
   text: string
@@ -100,6 +103,9 @@ export async function sendWhatsAppText(
     body: { type: 'text', text: { text } },
   })
 }
+
+// Alias mantido para o fluxo de opt-in (src/routes/webhooks.ts).
+export const sendWhatsAppText = sendWhatsAppTextMessage
 
 // Envia um template de mensagem já publicado no Bird Studio (Project + versão).
 // As variáveis são nomeadas (ex.: "numero_whatsapp"), não posicionais. Na Channels
