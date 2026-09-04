@@ -117,7 +117,12 @@ router.get<{ id: string }>('/:id', authenticate, async (req, res) => {
   const companyId = getCompanyId(req)
   const campaign = await prisma.campaign.findFirst({
     where: { id: req.params.id, companyId },
-    include: { messages: { include: { contact: true } } },
+    include: {
+      // Template completo: o detalhe da campanha mostra a pré-visualização
+      // estilo WhatsApp, que precisa de header/body/footer/botões.
+      template: true,
+      messages: { include: { contact: true } },
+    },
   })
   if (!campaign) return res.status(404).json({ error: 'Not found' })
   res.json(campaign)
