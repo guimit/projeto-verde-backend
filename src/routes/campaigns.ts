@@ -238,6 +238,10 @@ export async function executeCampaignSend(campaignId: string): Promise<CampaignS
 
   await prisma.campaign.update({ where: { id: campaign.id }, data: { status: 'sending' } })
 
+  // Uma tentativa de envio começa do zero — limpa linhas de tentativas anteriores
+  // (ex.: um envio que falhou por completo e voltou a `draft`).
+  await prisma.campaignMessage.deleteMany({ where: { campaignId: campaign.id } })
+
   // Uma linha CampaignMessage por contacto, a pending — para o frontend mostrar
   // o progresso enquanto o envio decorre.
   const rows = await Promise.all(

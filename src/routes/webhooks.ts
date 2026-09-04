@@ -127,6 +127,66 @@ function parseInboundMessage(body: any): Inbound {
   }
 }
 
+// True se o payload é um evento de mensagem SAÍDA (nunca deve ir ao opt-in).
+// Formato real do Bird Channels: { service:'channels', event:'whatsapp.outbound',
+// payload:{ id, status, reason, direction:'outgoing', ... } }.
+function isOutboundEvent(body: any): boolean {
+  const name = String(body?.event ?? body?.type ?? '').toLowerCase()
+  return (
+    name === 'whatsapp.outbound' ||
+    name === 'message.status.updated' ||
+    name.endsWith('.outbound') ||
+    /\.(accepted|processing|sent|delivered|read|failed|rejected|undeliverable)$/.test(name) ||
+    body?.payload?.direction === 'outgoing' ||
+    body?.data?.direction === 'outbound'
+  )
+}
+
+// Lê um status update acionável (delivered / read / failed) de um evento de saída.
+// Devolve null para estados que não nos interessam (accepted/processing/sent) ou
+// payloads irreconhecíveis. `messageId` corresponde ao `id` devolvido pela
+// Channels API no envio (guardado em CampaignMessage.birdMessageId).
+function extractStatusEvent(
+  body: any
+): { messageId?: string; status: 'delivered' | 'read' | 'failed'; failReason?: string } | null {
+  const p = body?.payload ?? {}
+  const name = String(body?.event ?? body?.type ?? '')
+
+  const explicit: string =
+    p?.status ?? // formato real observado nos logs
+    p?.message?.status?.current ??
+    body?.data?.status ??
+    body?.message?.status?.current ??
+    ''
+  const fromName = name.match(/\.(delivered|read|failed|rejected|undeliverable)$/i)?.[1]
+  const raw = String(explicit || fromName || '').toLowerCase()
+
+  let status: 'delivered' | 'read' | 'failed'
+  if (raw === 'delivered') status = 'delivered'
+  else if (raw === 'read') status = 'read'
+  else if (raw === 'failed' || raw === 'rejected' || raw === 'undeliverable') status = 'failed'
+  else return null
+
+  const messageId: string | undefined =
+    p?.id ??
+    p?.message?.id ??
+    body?.data?.id ??
+    body?.data?.message?.id ??
+    body?.message?.id ??
+    body?.id ??
+    undefined
+
+  const failReason: string | undefined =
+    p?.reason ||
+    p?.message?.status?.errors?.[0]?.description ||
+    body?.data?.error?.description ||
+    body?.data?.error?.reason ||
+    body?.error?.description ||
+    undefined
+
+  return { messageId: messageId ? String(messageId) : undefined, status, failReason }
+}
+
 async function resolveCompany(channelId?: string, to?: string) {
   if (channelId) {
     const c = await prisma.company.findFirst({ where: { birdChannelId: channelId } })
@@ -158,33 +218,44 @@ router.post('/bird', async (req, res) => {
   if (challenge) return res.status(200).json({ challenge })
   if (req.body?.type === 'webhook.test') return res.status(200).json({ ok: true })
 
-  // Status update de uma mensagem de campanha já enviada (delivered / read /
-  // failed). Entra antes do fluxo de opt-in e responde já. Paths do payload a
-  // confirmar com o 1º evento real registado em '[bird webhook] inbound'.
-  if (req.body?.type === 'message.status.updated') {
-    const msgId = req.body?.payload?.message?.id
-    const status = req.body?.payload?.message?.status?.current
-    let update: Record<string, unknown> = {}
-    if (msgId && status === 'delivered') {
-      update = { status: 'delivered', deliveredAt: new Date() }
-    } else if (msgId && status === 'read') {
-      update = { status: 'read', readAt: new Date() }
-    } else if (msgId && status === 'failed') {
-      update = {
-        status: 'failed',
-        failedAt: new Date(),
-        failReason: req.body?.payload?.message?.status?.errors?.[0]?.description ?? null,
-      }
+  // Evento de mensagem SAÍDA (status de campanha). O Bird manda
+  // { service:'channels', event:'whatsapp.outbound', payload:{ id, status, reason,... } }
+  // para cada transição (accepted→processing→sent→delivered→read). Só agimos em
+  // delivered/read/failed; qualquer evento de saída responde já e nunca vai ao opt-in.
+  if (isOutboundEvent(req.body)) {
+    const evt = extractStatusEvent(req.body)
+    if (!evt) {
+      return res.status(200).json({
+        ok: true,
+        action: 'status_noop',
+        status: req.body?.payload?.status ?? null,
+      })
     }
-    if (Object.keys(update).length) {
-      // `read` não regride para `delivered` se os eventos chegarem fora de ordem.
-      const where =
-        update.status === 'delivered'
-          ? { birdMessageId: msgId, status: { notIn: ['read'] } }
-          : { birdMessageId: msgId }
-      await prisma.campaignMessage.updateMany({ where, data: update })
+    const { messageId, status, failReason } = evt
+    const update: Record<string, unknown> =
+      status === 'delivered'
+        ? { status: 'delivered', deliveredAt: new Date() }
+        : status === 'read'
+        ? { status: 'read', readAt: new Date() }
+        : { status: 'failed', failedAt: new Date(), failReason: failReason ?? null }
+
+    let matched = 0
+    if (messageId) {
+      // Não regride de um estado mais avançado se os eventos chegarem fora de ordem.
+      const guard =
+        status === 'delivered'
+          ? { status: { notIn: ['read'] } }
+          : status === 'failed'
+          ? { status: { notIn: ['read', 'delivered'] } }
+          : {}
+      const r = await prisma.campaignMessage.updateMany({
+        where: { birdMessageId: messageId, ...guard },
+        data: update,
+      })
+      matched = r.count
     }
-    return res.status(200).json({ ok: true, action: 'status', status: status ?? null })
+    console.log('[bird webhook] status', { messageId, status, matched })
+    return res.status(200).json({ ok: true, action: 'status', status, matched })
   }
 
   const inbound = parseInboundMessage(req.body)
