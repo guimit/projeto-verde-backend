@@ -6,6 +6,8 @@ export interface AuthPayload {
   role: string
   companyId?: string
   impersonating?: string
+  pendingSetup?: boolean
+  pending2FA?: boolean
 }
 
 declare global {
@@ -21,7 +23,11 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
   if (!token) return res.status(401).json({ error: 'Token required' })
 
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET!) as AuthPayload
+    const payload = jwt.verify(token, process.env.JWT_SECRET!) as AuthPayload
+    if (payload.pendingSetup || payload.pending2FA) {
+      return res.status(401).json({ error: 'Token pendente de verificação 2FA' })
+    }
+    req.user = payload
     next()
   } catch {
     return res.status(401).json({ error: 'Invalid token' })

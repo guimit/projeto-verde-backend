@@ -85,6 +85,11 @@ model User {
   companyId String?
   company   Company? @relation(fields: [companyId], references: [id])
 
+  twoFactorEnabled     Boolean   @default(false)
+  twoFactorSecret      String?
+  passwordResetToken   String?   @unique
+  passwordResetExpires DateTime?
+
   impersonationLogs ImpersonationLog[]
   templatesApproved Template[]
 }
