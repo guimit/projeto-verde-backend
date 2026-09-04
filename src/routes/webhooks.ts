@@ -158,6 +158,35 @@ router.post('/bird', async (req, res) => {
   if (challenge) return res.status(200).json({ challenge })
   if (req.body?.type === 'webhook.test') return res.status(200).json({ ok: true })
 
+  // Status update de uma mensagem de campanha já enviada (delivered / read /
+  // failed). Entra antes do fluxo de opt-in e responde já. Paths do payload a
+  // confirmar com o 1º evento real registado em '[bird webhook] inbound'.
+  if (req.body?.type === 'message.status.updated') {
+    const msgId = req.body?.payload?.message?.id
+    const status = req.body?.payload?.message?.status?.current
+    let update: Record<string, unknown> = {}
+    if (msgId && status === 'delivered') {
+      update = { status: 'delivered', deliveredAt: new Date() }
+    } else if (msgId && status === 'read') {
+      update = { status: 'read', readAt: new Date() }
+    } else if (msgId && status === 'failed') {
+      update = {
+        status: 'failed',
+        failedAt: new Date(),
+        failReason: req.body?.payload?.message?.status?.errors?.[0]?.description ?? null,
+      }
+    }
+    if (Object.keys(update).length) {
+      // `read` não regride para `delivered` se os eventos chegarem fora de ordem.
+      const where =
+        update.status === 'delivered'
+          ? { birdMessageId: msgId, status: { notIn: ['read'] } }
+          : { birdMessageId: msgId }
+      await prisma.campaignMessage.updateMany({ where, data: update })
+    }
+    return res.status(200).json({ ok: true, action: 'status', status: status ?? null })
+  }
+
   const inbound = parseInboundMessage(req.body)
 
   if (!inbound.isInboundText || !inbound.from) {

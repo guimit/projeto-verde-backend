@@ -23,20 +23,27 @@ function stripPublicBase(value: string): string {
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif)(\?|$)/i
 
-// A media do cabeçalho quer o URL completo; os botões de URL querem só o sufixo.
-function paramValue(value: string): string {
-  const s = collapseDoubledBase(value.trim())
+// Monta um parâmetro do template Bird a partir do nome + valor da variável:
+// - valor com extensão de imagem -> parâmetro de media do cabeçalho
+//   ({ type: 'image', url: <URL completo> }); o Bird encaminha-o para o header
+//   em vez de o contar como parâmetro de corpo.
+// - restantes URLs de storage (PDF/botão) -> só o sufixo, o resto do template
+//   (prefixo do botão) já está fixo no Bird Studio.
+// - texto normal -> string tal como está.
+function toParameter(key: string, raw: string): Record<string, string> {
+  const s = collapseDoubledBase(raw.trim())
   if (IMAGE_EXT.test(s)) {
-    // Normaliza o domínio de dev antigo para a base pública atual.
-    return PUBLIC_URL ? s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev/i, PUBLIC_URL) : s
+    const url = PUBLIC_URL ? s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev/i, PUBLIC_URL) : s
+    return { type: 'image', key, url }
   }
-  return stripPublicBase(s)
+  return { type: 'string', key, value: stripPublicBase(s) }
 }
 
 interface SendResult {
   ok: boolean
   status?: number
-  id?: string
+  // ID da mensagem criada na Bird — necessário para correlacionar os status updates.
+  messageId?: string
   error?: string
 }
 
@@ -54,6 +61,7 @@ async function post(channelId: string, payload: unknown): Promise<SendResult> {
   }
 
   const url = `${BASE}/workspaces/${workspaceId}/channels/${channelId}/messages`
+  console.log('[bird] POST', url, JSON.stringify(payload))
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -70,20 +78,22 @@ async function post(channelId: string, payload: unknown): Promise<SendResult> {
       return { ok: false, status: res.status, error: raw }
     }
 
-    let id: string | undefined
+    let messageId: string | undefined
     try {
-      id = JSON.parse(raw)?.id
+      messageId = JSON.parse(raw)?.id
     } catch {
       /* corpo não-JSON */
     }
-    return { ok: true, status: res.status, id }
+    return { ok: true, status: res.status, messageId }
   } catch (err) {
     console.error('[bird] erro de rede no envio', err)
     return { ok: false, error: (err as Error).message }
   }
 }
 
-export async function sendWhatsAppText(
+// Envia uma mensagem de texto simples (sem template). Usado no envio de teste de
+// campanha e nas respostas do fluxo de opt-in.
+export async function sendWhatsAppTextMessage(
   channelId: string,
   toPhone: string,
   text: string
@@ -93,6 +103,9 @@ export async function sendWhatsAppText(
     body: { type: 'text', text: { text } },
   })
 }
+
+// Alias mantido para o fluxo de opt-in (src/routes/webhooks.ts).
+export const sendWhatsAppText = sendWhatsAppTextMessage
 
 // Envia um template de mensagem já publicado no Bird Studio (Project + versão).
 // As variáveis são nomeadas (ex.: "numero_whatsapp"), não posicionais. Na Channels
@@ -110,7 +123,7 @@ export async function sendWhatsAppTemplate(
 ): Promise<SendResult> {
   const parameters = Object.entries(opts.variables ?? {})
     .filter(([, value]) => value != null && value !== '')
-    .map(([key, value]) => ({ type: 'string', key, value: paramValue(value) }))
+    .map(([key, value]) => toParameter(key, value))
   return post(channelId, {
     receiver: { contacts: [{ identifierValue: toPhone }] },
     template: {

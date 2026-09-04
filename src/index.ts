@@ -11,6 +11,7 @@ import uploadRoutes from './routes/uploads'
 import creditRoutes from './routes/credits'
 import adminRoutes from './routes/admin'
 import webhookRoutes from './routes/webhooks'
+import { startScheduler } from './lib/scheduler'
 
 dotenv.config()
 
@@ -32,4 +33,7 @@ app.use('/api/webhooks', webhookRoutes)
 
 app.get('/health', (_, res) => res.json({ ok: true }))
 
-app.listen(PORT, () => console.log(`Backend running on :${PORT}`))
+app.listen(PORT, () => {
+  console.log(`Backend running on :${PORT}`)
+  startScheduler()
+})
