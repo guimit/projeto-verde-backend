@@ -192,6 +192,8 @@ export interface CampaignSendResult {
   shortfall: number
   // Preenchido quando o envio nem chegou a arrancar (sem créditos, sem canal, etc.).
   skippedReason?: string
+  // 1º erro devolvido pelo Bird, para diagnóstico quando nada foi aceite.
+  firstError?: string
 }
 
 // Envia (ou reenvia) uma campanha via Bird.com. Partilhada pelo handler
@@ -265,6 +267,7 @@ export async function executeCampaignSend(campaignId: string): Promise<CampaignS
 
   let sent = 0
   let failed = 0
+  let firstError: string | undefined
   await Promise.all(
     results.map((settled, i) => {
       const rowId = rows[i].id
@@ -284,16 +287,17 @@ export async function executeCampaignSend(campaignId: string): Promise<CampaignS
         settled.status === 'rejected'
           ? String((settled.reason as Error)?.message ?? settled.reason)
           : settled.value.error ?? 'erro desconhecido'
+      if (!firstError) firstError = reason
       return prisma.campaignMessage.update({
         where: { id: rowId },
-        data: { status: 'failed', failedAt: new Date(), failReason: reason.slice(0, 500) },
+        data: { status: 'failed', failedAt: new Date(), failReason: reason.slice(0, 1000) },
       })
     })
   )
 
   if (sent === 0) {
     await prisma.campaign.update({ where: { id: campaign.id }, data: { status: 'draft' } })
-    return { sent: 0, failed, shortfall }
+    return { sent: 0, failed, shortfall, firstError }
   }
 
   await prisma.$transaction(async (tx) => {
@@ -344,7 +348,11 @@ router.post<{ id: string }>('/:id/send', authenticate, async (req, res) => {
     return res.status(400).json({ error: result.skippedReason })
   }
   if (result.sent === 0) {
-    return res.status(502).json({ error: 'Nenhuma mensagem foi aceite pelo Bird' })
+    return res.status(502).json({
+      error: `Nenhuma mensagem foi aceite pelo Bird${
+        result.firstError ? `: ${result.firstError}` : ''
+      }`,
+    })
   }
 
   const updated = await prisma.campaign.findUnique({

@@ -23,20 +23,20 @@ function stripPublicBase(value: string): string {
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif)(\?|$)/i
 
-// Monta um parâmetro do template Bird a partir do nome + valor da variável:
-// - valor com extensão de imagem -> parâmetro de media do cabeçalho
-//   ({ type: 'image', url: <URL completo> }); o Bird encaminha-o para o header
-//   em vez de o contar como parâmetro de corpo.
-// - restantes URLs de storage (PDF/botão) -> só o sufixo, o resto do template
-//   (prefixo do botão) já está fixo no Bird Studio.
-// - texto normal -> string tal como está.
-function toParameter(key: string, raw: string): Record<string, string> {
+// Normaliza o valor de uma variável do template antes de o enviar ao Bird.
+// Na Channels API todos os parâmetros são { type: 'string', key, value } —
+// inclusive URLs de imagem/PDF (o Bird resolve a media do cabeçalho pela
+// definição do template). Enviar a media como { type: 'image', url } é rejeitado
+// com InvalidPayload ("malformed .template.parameters[n]").
+// - valor com extensão de imagem -> URL completo (domínio normalizado)
+// - restantes URLs de storage (PDF/botão) -> só o sufixo a seguir à base pública
+// - texto normal -> tal como está
+function paramValue(raw: string): string {
   const s = collapseDoubledBase(raw.trim())
   if (IMAGE_EXT.test(s)) {
-    const url = PUBLIC_URL ? s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev/i, PUBLIC_URL) : s
-    return { type: 'image', key, url }
+    return PUBLIC_URL ? s.replace(/^https?:\/\/pub-[a-z0-9]+\.r2\.dev/i, PUBLIC_URL) : s
   }
-  return { type: 'string', key, value: stripPublicBase(s) }
+  return stripPublicBase(s)
 }
 
 interface SendResult {
@@ -123,7 +123,7 @@ export async function sendWhatsAppTemplate(
 ): Promise<SendResult> {
   const parameters = Object.entries(opts.variables ?? {})
     .filter(([, value]) => value != null && value !== '')
-    .map(([key, value]) => toParameter(key, value))
+    .map(([key, value]) => ({ type: 'string', key, value: paramValue(value) }))
   return post(channelId, {
     receiver: { contacts: [{ identifierValue: toPhone }] },
     template: {
