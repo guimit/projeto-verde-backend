@@ -118,7 +118,9 @@ router.get<{ id: string }>('/:id', authenticate, async (req, res) => {
   const campaign = await prisma.campaign.findFirst({
     where: { id: req.params.id, companyId },
     include: {
-      template: { select: { name: true } },
+      // Template completo: o detalhe da campanha mostra a pré-visualização
+      // estilo WhatsApp, que precisa de header/body/footer/botões.
+      template: true,
       messages: { include: { contact: true } },
     },
   })
