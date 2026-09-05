@@ -40,25 +40,34 @@ const schema = z
 
     BIRD_API_KEY: optional(z.string()),
     BIRD_WORKSPACE_ID: optional(z.string()),
-    TURNSTILE_SECRET_KEY: optional(z.string()),
+    // Sem Turnstile o login falha sempre — obrigatória em produção.
+    TURNSTILE_SECRET_KEY: isProd
+      ? z
+          .string({ required_error: 'TURNSTILE_SECRET_KEY é obrigatória em produção (sem ela o login falha sempre)' })
+          .min(1, 'TURNSTILE_SECRET_KEY é obrigatória em produção (sem ela o login falha sempre)')
+      : optional(z.string()),
     RESEND_API_KEY: optional(z.string()),
     RESEND_FROM_EMAIL: optional(z.string()),
   })
-  .refine((e) => !isProd || e.BIRD_WEBHOOK_SIGNING_SECRET || e.BIRD_WEBHOOK_SECRET, {
-    message: 'Em produção é obrigatório BIRD_WEBHOOK_SIGNING_SECRET ou BIRD_WEBHOOK_SECRET',
-    path: ['BIRD_WEBHOOK_SECRET'],
-  })
-  .refine((e) => !isProd || !!e.TURNSTILE_SECRET_KEY, {
-    message: 'Em produção TURNSTILE_SECRET_KEY é obrigatória (sem ela o login falha sempre)',
-    path: ['TURNSTILE_SECRET_KEY'],
-  })
 
 const parsed = schema.safeParse(process.env)
-if (!parsed.success) {
+
+// Todos os problemas de uma vez (o zod não corre refinements cruzados enquanto
+// há erros de campo, e um deploy que falha por um erro de cada vez é irritante).
+const problems: string[] = parsed.success
+  ? []
+  : parsed.error.issues.map((i) => `${i.path.join('.') || '(global)'}: ${i.message}`)
+
+const hasWebhookAuth = !!process.env.BIRD_WEBHOOK_SIGNING_SECRET || !!process.env.BIRD_WEBHOOK_SECRET
+if (isProd && !hasWebhookAuth) {
+  problems.push(
+    'BIRD_WEBHOOK_SECRET: em produção é obrigatório BIRD_WEBHOOK_SIGNING_SECRET (whsec_...) ou BIRD_WEBHOOK_SECRET (16+ caracteres)'
+  )
+}
+
+if (!parsed.success || problems.length) {
   console.error('[env] configuração inválida — o servidor não arranca:')
-  for (const issue of parsed.error.issues) {
-    console.error(`  - ${issue.path.join('.') || '(global)'}: ${issue.message}`)
-  }
+  for (const p of problems) console.error(`  - ${p}`)
   process.exit(1)
 }
 
