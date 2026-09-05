@@ -85,8 +85,8 @@ model User {
   companyId String?
   company   Company? @relation(fields: [companyId], references: [id])
 
-  twoFactorEnabled     Boolean   @default(false)
-  twoFactorSecret      String?
+  loginOtpCode         String?
+  loginOtpExpires      DateTime?
   passwordResetToken   String?   @unique
   passwordResetExpires DateTime?
 

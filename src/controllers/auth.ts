@@ -4,8 +4,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { prisma } from '../utils/prisma'
 import { verifyTurnstileToken } from '../lib/turnstile'
-import { sendPasswordResetEmail } from '../lib/resend'
-import { generateTotpSecret, generateTotpQrDataUrl, verifyTotpCode } from '../lib/totp'
+import { sendPasswordResetEmail, sendLoginOtpEmail } from '../lib/resend'
 
 const sign = (payload: object) =>
   jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: '7d' })
@@ -13,8 +12,12 @@ const sign = (payload: object) =>
 const signTemp = (payload: object) =>
   jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: '10m' })
 
-function hashResetToken(token: string) {
+function hashToken(token: string) {
   return crypto.createHash('sha256').update(token).digest('hex')
+}
+
+function generateOtpCode() {
+  return String(crypto.randomInt(100_000, 1_000_000))
 }
 
 export async function login(req: Request, res: Response) {
@@ -31,62 +34,20 @@ export async function login(req: Request, res: Response) {
   }
   if (!user.active) return res.status(403).json({ error: 'Account disabled' })
 
-  if (!user.twoFactorEnabled) {
-    const tempToken = signTemp({ userId: user.id, pendingSetup: true })
-    return res.json({ requires2FASetup: true, tempToken })
-  }
+  const code = generateOtpCode()
+  const expiryMin = Number(process.env.LOGIN_OTP_EXPIRY_MIN ?? 10)
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      loginOtpCode: hashToken(code),
+      loginOtpExpires: new Date(Date.now() + expiryMin * 60_000),
+    },
+  })
+  await sendLoginOtpEmail(user.email, code)
 
   const tempToken = signTemp({ userId: user.id, pending2FA: true })
   return res.json({ requires2FA: true, tempToken })
-}
-
-export async function setup2FA(req: Request, res: Response) {
-  const { tempToken } = req.body
-
-  let payload: any
-  try {
-    payload = jwt.verify(tempToken, process.env.JWT_SECRET!)
-  } catch {
-    return res.status(401).json({ error: 'Token inválido' })
-  }
-  if (!payload.pendingSetup) return res.status(401).json({ error: 'Token inválido' })
-
-  const user = await prisma.user.findUnique({ where: { id: payload.userId } })
-  if (!user) return res.status(401).json({ error: 'Token inválido' })
-
-  const secret = generateTotpSecret()
-  await prisma.user.update({ where: { id: user.id }, data: { twoFactorSecret: secret } })
-
-  const qrCodeUrl = await generateTotpQrDataUrl(secret, user.email)
-
-  return res.json({ secret, qrCodeUrl })
-}
-
-export async function confirmSetup2FA(req: Request, res: Response) {
-  const { tempToken, code } = req.body
-
-  let payload: any
-  try {
-    payload = jwt.verify(tempToken, process.env.JWT_SECRET!)
-  } catch {
-    return res.status(401).json({ error: 'Token inválido' })
-  }
-  if (!payload.pendingSetup) return res.status(401).json({ error: 'Token inválido' })
-
-  const user = await prisma.user.findUnique({ where: { id: payload.userId } })
-  if (!user || !user.twoFactorSecret) return res.status(401).json({ error: 'Token inválido' })
-
-  if (!(await verifyTotpCode(user.twoFactorSecret, code))) {
-    return res.status(400).json({ error: 'Código inválido — tente novamente' })
-  }
-
-  await prisma.user.update({ where: { id: user.id }, data: { twoFactorEnabled: true } })
-
-  const token = sign({ userId: user.id, role: user.role, companyId: user.companyId })
-  return res.json({
-    token,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role, companyId: user.companyId, twoFactorEnabled: true },
-  })
 }
 
 export async function verify2FA(req: Request, res: Response) {
@@ -101,16 +62,22 @@ export async function verify2FA(req: Request, res: Response) {
   if (!payload.pending2FA) return res.status(401).json({ error: 'Token inválido' })
 
   const user = await prisma.user.findUnique({ where: { id: payload.userId } })
-  if (!user || !user.twoFactorSecret) return res.status(401).json({ error: 'Token inválido' })
-
-  if (!(await verifyTotpCode(user.twoFactorSecret, code))) {
-    return res.status(401).json({ error: 'Código inválido' })
+  if (!user || !user.loginOtpCode || !user.loginOtpExpires) {
+    return res.status(401).json({ error: 'Token inválido' })
   }
+  if (user.loginOtpExpires < new Date() || user.loginOtpCode !== hashToken(code)) {
+    return res.status(401).json({ error: 'Código inválido ou expirado' })
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { loginOtpCode: null, loginOtpExpires: null },
+  })
 
   const token = sign({ userId: user.id, role: user.role, companyId: user.companyId })
   return res.json({
     token,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role, companyId: user.companyId, twoFactorEnabled: true },
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, companyId: user.companyId },
   })
 }
 
@@ -130,7 +97,7 @@ export async function forgotPassword(req: Request, res: Response) {
     await prisma.user.update({
       where: { id: user.id },
       data: {
-        passwordResetToken: hashResetToken(rawToken),
+        passwordResetToken: hashToken(rawToken),
         passwordResetExpires: new Date(Date.now() + expiryMin * 60_000),
       },
     })
@@ -150,7 +117,7 @@ export async function resetPassword(req: Request, res: Response) {
   }
 
   const user = await prisma.user.findFirst({
-    where: { passwordResetToken: hashResetToken(token), passwordResetExpires: { gt: new Date() } },
+    where: { passwordResetToken: hashToken(token), passwordResetExpires: { gt: new Date() } },
   })
   if (!user) return res.status(400).json({ error: 'Token inválido ou expirado' })
 
@@ -169,7 +136,7 @@ export async function resetPassword(req: Request, res: Response) {
 export async function me(req: Request, res: Response) {
   const user = await prisma.user.findUnique({
     where: { id: req.user!.userId },
-    select: { id: true, name: true, email: true, role: true, companyId: true, twoFactorEnabled: true },
+    select: { id: true, name: true, email: true, role: true, companyId: true },
   })
   return res.json(user)
 }
