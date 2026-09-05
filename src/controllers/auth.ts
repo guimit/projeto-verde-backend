@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken'
 import { prisma } from '../utils/prisma'
 import { verifyTurnstileToken } from '../lib/turnstile'
 import { sendPasswordResetEmail, sendLoginOtpEmail } from '../lib/resend'
+import { generateTotpSecret, generateTotpQrDataUrl, verifyTotpCode } from '../lib/totp'
 
 const sign = (payload: object) =>
   jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: '7d' })
@@ -59,9 +60,63 @@ export async function login(req: Request, res: Response) {
   }
   if (!user.active) return res.status(403).json({ error: 'Account disabled' })
 
+  // Primeiro login: ainda não há app autenticadora configurada — força o
+  // setup do TOTP (o próprio setup, provado por um código válido gerado
+  // pela app, já confirma a identidade; não depende do email).
+  if (!user.twoFactorSecret) {
+    const tempToken = signTemp({ userId: user.id, pendingSetup: true })
+    return res.json({ requiresTotpSetup: true, tempToken })
+  }
+
   const { emailSent } = await issueLoginOtp(user.id, user.email)
   const tempToken = signTemp({ userId: user.id, pending2FA: true })
   return res.json({ requires2FA: true, tempToken, emailSent })
+}
+
+export async function setup2FA(req: Request, res: Response) {
+  const { tempToken } = req.body
+
+  let payload: any
+  try {
+    payload = jwt.verify(tempToken, process.env.JWT_SECRET!)
+  } catch {
+    return res.status(401).json({ error: 'Token inválido' })
+  }
+  if (!payload.pendingSetup) return res.status(401).json({ error: 'Token inválido' })
+
+  const user = await prisma.user.findUnique({ where: { id: payload.userId } })
+  if (!user) return res.status(401).json({ error: 'Token inválido' })
+
+  const secret = generateTotpSecret()
+  await prisma.user.update({ where: { id: user.id }, data: { twoFactorSecret: secret } })
+
+  const qrCodeUrl = await generateTotpQrDataUrl(secret, user.email)
+  return res.json({ secret, qrCodeUrl })
+}
+
+export async function confirmSetup2FA(req: Request, res: Response) {
+  const { tempToken, code } = req.body
+
+  let payload: any
+  try {
+    payload = jwt.verify(tempToken, process.env.JWT_SECRET!)
+  } catch {
+    return res.status(401).json({ error: 'Token inválido' })
+  }
+  if (!payload.pendingSetup) return res.status(401).json({ error: 'Token inválido' })
+
+  const user = await prisma.user.findUnique({ where: { id: payload.userId } })
+  if (!user || !user.twoFactorSecret) return res.status(401).json({ error: 'Token inválido' })
+
+  if (!(await verifyTotpCode(user.twoFactorSecret, code))) {
+    return res.status(400).json({ error: 'Código inválido — tente novamente' })
+  }
+
+  const token = sign({ userId: user.id, role: user.role, companyId: user.companyId })
+  return res.json({
+    token,
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, companyId: user.companyId },
+  })
 }
 
 export async function resendOtp(req: Request, res: Response) {
@@ -94,17 +149,27 @@ export async function verify2FA(req: Request, res: Response) {
   if (!payload.pending2FA) return res.status(401).json({ error: 'Token inválido' })
 
   const user = await prisma.user.findUnique({ where: { id: payload.userId } })
-  if (!user || !user.loginOtpCode || !user.loginOtpExpires) {
-    return res.status(401).json({ error: 'Token inválido' })
-  }
-  if (user.loginOtpExpires < new Date() || user.loginOtpCode !== hashToken(code)) {
+  if (!user) return res.status(401).json({ error: 'Token inválido' })
+
+  // Aceita o código de qualquer um dos dois fatores configurados — o
+  // utilizador escolhe qual usar (email já enviado, ou app autenticadora).
+  const emailValid =
+    !!user.loginOtpCode &&
+    !!user.loginOtpExpires &&
+    user.loginOtpExpires > new Date() &&
+    user.loginOtpCode === hashToken(code)
+  const totpValid = !!user.twoFactorSecret && (await verifyTotpCode(user.twoFactorSecret, code))
+
+  if (!emailValid && !totpValid) {
     return res.status(401).json({ error: 'Código inválido ou expirado' })
   }
 
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { loginOtpCode: null, loginOtpExpires: null },
-  })
+  if (emailValid) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { loginOtpCode: null, loginOtpExpires: null },
+    })
+  }
 
   const token = sign({ userId: user.id, role: user.role, companyId: user.companyId })
   return res.json({

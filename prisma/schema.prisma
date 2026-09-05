@@ -87,6 +87,7 @@ model User {
 
   loginOtpCode         String?
   loginOtpExpires      DateTime?
+  twoFactorSecret      String?
   passwordResetToken   String?   @unique
   passwordResetExpires DateTime?
 

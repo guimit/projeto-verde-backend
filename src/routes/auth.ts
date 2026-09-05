@@ -4,6 +4,8 @@ import {
   me,
   impersonate,
   endImpersonation,
+  setup2FA,
+  confirmSetup2FA,
   verify2FA,
   resendOtp,
   forgotPassword,
@@ -22,6 +24,8 @@ import {
 const router = Router()
 
 router.post('/login', validate(loginSchema), login)
+router.post('/2fa/setup', validate(tempTokenSchema), setup2FA)
+router.post('/2fa/confirm-setup', validate(otpSchema), confirmSetup2FA)
 router.post('/verify-2fa', validate(otpSchema), verify2FA)
 router.post('/resend-otp', validate(tempTokenSchema), resendOtp)
 router.post('/forgot-password', validate(forgotPasswordSchema), forgotPassword)

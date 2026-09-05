@@ -6,6 +6,7 @@ export interface AuthPayload {
   role: string
   companyId?: string
   impersonating?: string
+  pendingSetup?: boolean
   pending2FA?: boolean
 }
 
@@ -23,7 +24,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
 
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET!) as AuthPayload
-    if (payload.pending2FA) {
+    if (payload.pendingSetup || payload.pending2FA) {
       return res.status(401).json({ error: 'Token pendente de verificação 2FA' })
     }
     req.user = payload
