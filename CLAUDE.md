@@ -24,11 +24,16 @@ prisma/
   migrations/           # Histórico de migrations
   seed.ts               # Cria o primeiro platform_admin
 src/
-  index.ts              # Entry point, registo de rotas
+  index.ts              # Entry point, registo de rotas, handler de erros
+  config/
+    env.ts              # Validação das variáveis de ambiente (primeiro import)
+  schemas/              # Schemas zod por rota (validate())
   controllers/
     auth.ts             # login, me, impersonate, endImpersonation
   middleware/
-    auth.ts             # authenticate, requireRole, requirePlatformAdmin
+    auth.ts             # authenticate, requireRole, requireCompany, requireCompanyAdmin, requirePlatformAdmin
+    validate.ts         # validate({ body, params, query }) com zod
+    rateLimit.ts        # limiters (global, auth, webhook, envio de teste)
   routes/
     auth.ts
     companies.ts
@@ -47,6 +52,33 @@ src/
 - `admin` — dono da empresa cliente, acesso total à própria empresa
 - `assistant` — operador da empresa, acesso limitado
 
+### Matriz de permissões (aplicada no servidor)
+
+| Acção | platform_admin | admin | assistant |
+|---|---|---|---|
+| Ver contactos, campanhas, templates aprovados, créditos, uploads | ✔ | ✔ | ✔ |
+| Criar/editar campanhas, agendar/cancelar agendamento, envio de teste | ✔ | ✔ | ✔ |
+| Fazer upload de ficheiros | ✔ | ✔ | ✔ |
+| **Enviar** campanha (`POST /campaigns/:id/send`) | ✔ | ✔ | ✘ |
+| Apagar campanha, contacto ou upload | ✔ | ✔ | ✘ |
+| Gerir empresas, utilizadores, créditos, catálogo de templates, métricas | ✔ | ✘ | ✘ |
+
+Middlewares em `src/middleware/auth.ts`:
+- `authenticate` — valida o JWT **e** confirma na BD que o utilizador existe e está `active`; `role`/`companyId` vêm da BD, não do token.
+- `requireCompany` — resolve `req.companyId` (`impersonating ?? companyId`); 403 se não houver empresa. Obrigatório em todas as rotas de dados de empresa.
+- `requireCompanyAdmin` — `platform_admin` ou `admin`.
+- `requirePlatformAdmin` — só equipa interna.
+
+## Segurança — regras fixas
+
+- **Toda a rota valida input com zod** via `validate({ body, params, query })` (`src/middleware/validate.ts`); schemas em `src/schemas/`. IDs em params são sempre `uuid`; telefones `phoneE164`.
+- **Nunca** ler `companyId` do body/query para decidir acesso — vem sempre de `req.companyId`.
+- Uploads: o tipo é detectado pelos magic bytes (`src/routes/uploads.ts`), nunca pelo `mimetype` ou extensão do cliente. Só PNG, JPEG e PDF.
+- Webhook do Bird (`/api/webhooks/bird`): autenticado por assinatura HMAC (`BIRD_WEBHOOK_SIGNING_SECRET`) ou segredo partilhado (`BIRD_WEBHOOK_SECRET`, header `x-webhook-secret` ou `?secret=`). Em produção um dos dois é obrigatório.
+- Rate limiting (`src/middleware/rateLimit.ts`): global por IP, apertado nas rotas de auth, por empresa no envio de teste, por IP no webhook. OTP por email invalida-se ao 5.º erro.
+- Env validada ao arrancar em `src/config/env.ts` (é o primeiro import de `index.ts`). Ler variáveis por `env.X`, não por `process.env`.
+- Logs sem PII: telefones sempre por `maskPhone` (`src/lib/log.ts`); nunca logar o payload de webhooks nem de envios.
+
 ## Impersonation
 
 O `platform_admin` pode aceder ao painel de qualquer empresa cliente.
@@ -63,18 +95,19 @@ Envio de campanha deve verificar saldo antes de disparar — bloquear se `credit
 
 ## Variáveis de ambiente
 
-Ver `.env.example`. Obrigatórias para arrancar:
+Ver `.env.example`. Validadas ao arrancar (`src/config/env.ts`). Obrigatórias:
 - `DATABASE_URL`
-- `JWT_SECRET`
+- `JWT_SECRET` (≥ 32 caracteres em produção; nunca o valor de exemplo)
 - `FRONTEND_URL`
+- Em produção também: `TURNSTILE_SECRET_KEY` e `BIRD_WEBHOOK_SIGNING_SECRET` **ou** `BIRD_WEBHOOK_SECRET`
 
 Bird é opcional até integrar o envio real:
 - `BIRD_API_KEY`
 - `BIRD_WORKSPACE_ID`
 
-Seed do primeiro admin (`npm run db:seed`):
-- `ADMIN_EMAIL` (default `contato@guilhermemenezes.com`)
-- `ADMIN_PASSWORD` (default `changeme123`)
+Seed do primeiro admin (`npm run db:seed`) — sem defaults, ambas obrigatórias:
+- `ADMIN_EMAIL`
+- `ADMIN_PASSWORD` (≥ 12 caracteres)
 
 ## Comandos
 

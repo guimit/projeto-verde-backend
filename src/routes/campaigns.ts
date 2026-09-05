@@ -1,13 +1,17 @@
 import { Router } from 'express'
-import { authenticate } from '../middleware/auth'
+import { authenticate, requireCompany, requireCompanyAdmin } from '../middleware/auth'
+import { validate } from '../middleware/validate'
+import { testSendLimiter } from '../middleware/rateLimit'
+import { idParams } from '../schemas/common'
+import { campaignBodySchema, testSendSchema } from '../schemas/campaigns'
+import { maskPhone } from '../lib/log'
 import { prisma } from '../utils/prisma'
 import { sendWhatsAppTemplate, sendWhatsAppTextMessage } from '../lib/bird'
 
 const router = Router()
 
-function getCompanyId(req: any) {
-  return req.user.impersonating ?? req.user.companyId
-}
+// Todas as rotas exigem sessão e empresa activa (req.companyId vem de requireCompany).
+router.use(authenticate, requireCompany)
 
 interface AudienceFilters {
   createdFrom?: string
@@ -84,8 +88,8 @@ function resolveVariables(
   return out
 }
 
-router.get('/', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.get('/', async (req, res) => {
+  const companyId = req.companyId!
   const campaigns = await prisma.campaign.findMany({
     where: { companyId },
     include: { template: { select: { name: true } } },
@@ -94,8 +98,8 @@ router.get('/', authenticate, async (req, res) => {
   res.json(campaigns)
 })
 
-router.post('/', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.post('/', validate(campaignBodySchema), async (req, res) => {
+  const companyId = req.companyId!
   const { name, templateId, scheduledAt, filters, variableValues } = req.body
   const templateError = await assertTemplateApproved(templateId)
   if (templateError) return res.status(400).json({ error: templateError })
@@ -113,8 +117,8 @@ router.post('/', authenticate, async (req, res) => {
   res.status(201).json(campaign)
 })
 
-router.get<{ id: string }>('/:id', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.get<{ id: string }>('/:id', validate({ params: idParams }), async (req, res) => {
+  const companyId = req.companyId!
   const campaign = await prisma.campaign.findFirst({
     where: { id: req.params.id, companyId },
     include: {
@@ -128,8 +132,8 @@ router.get<{ id: string }>('/:id', authenticate, async (req, res) => {
   res.json(campaign)
 })
 
-router.put<{ id: string }>('/:id', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.put<{ id: string }>('/:id', validate({ params: idParams, body: campaignBodySchema }), async (req, res) => {
+  const companyId = req.companyId!
   const existing = await prisma.campaign.findFirst({
     where: { id: req.params.id, companyId },
   })
@@ -156,8 +160,8 @@ router.put<{ id: string }>('/:id', authenticate, async (req, res) => {
   res.json(campaign)
 })
 
-router.delete<{ id: string }>('/:id', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.delete<{ id: string }>('/:id', requireCompanyAdmin, validate({ params: idParams }), async (req, res) => {
+  const companyId = req.companyId!
   const campaign = await prisma.campaign.findFirst({
     where: { id: req.params.id, companyId },
   })
@@ -170,8 +174,8 @@ router.delete<{ id: string }>('/:id', authenticate, async (req, res) => {
   res.status(204).end()
 })
 
-router.post<{ id: string }>('/:id/cancel-schedule', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.post<{ id: string }>('/:id/cancel-schedule', validate({ params: idParams }), async (req, res) => {
+  const companyId = req.companyId!
   const campaign = await prisma.campaign.findFirst({
     where: { id: req.params.id, companyId },
   })
@@ -341,8 +345,8 @@ export async function executeCampaignSend(campaignId: string): Promise<CampaignS
 
 // Envia a campanha via Bird.com (WhatsApp). A lógica vive em executeCampaignSend(),
 // partilhada com o scheduler.
-router.post<{ id: string }>('/:id/send', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.post<{ id: string }>('/:id/send', requireCompanyAdmin, validate({ params: idParams }), async (req, res) => {
+  const companyId = req.companyId!
   const campaign = await prisma.campaign.findFirst({
     where: { id: req.params.id, companyId },
     select: { id: true, status: true },
@@ -376,16 +380,28 @@ router.post<{ id: string }>('/:id/send', authenticate, async (req, res) => {
 
 // Test sends don't touch the real audience, credits or campaign status — but they
 // do hit Bird for real, so the tester actually receives the WhatsApp message.
-router.post<{ id: string }>('/:id/test', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+// O teste não debita créditos, por isso é limitado por empresa (testSendLimiter) e
+// o número é validado (E.164) e registado — é o único travão contra usar o canal
+// WhatsApp da empresa para mandar texto livre a números arbitrários.
+router.post<{ id: string }>(
+  '/:id/test',
+  testSendLimiter,
+  validate({ params: idParams, body: testSendSchema }),
+  async (req, res) => {
+  const companyId = req.companyId!
   const campaign = await prisma.campaign.findFirst({
     where: { id: req.params.id, companyId },
     include: { template: true },
   })
   if (!campaign) return res.status(404).json({ error: 'Not found' })
 
-  const { phone } = req.body
-  if (!phone) return res.status(400).json({ error: 'Número de telefone é obrigatório' })
+  const { phone } = req.body as { phone: string }
+  console.log('[campaigns] envio de teste', {
+    companyId,
+    userId: req.user!.userId,
+    campaignId: campaign.id,
+    phone: maskPhone(phone),
+  })
 
   // If the test number belongs to a real contact, variables bound to contact
   // fields resolve to that contact's data — same as a real send would.
@@ -414,6 +430,7 @@ router.post<{ id: string }>('/:id/test', authenticate, async (req, res) => {
     return res.status(502).json({ error: `Falha no teste. Bird: ${result.error ?? 'erro'}` })
   }
   res.json({ ok: true, phone, preview, sent: true, birdMessageId: result.messageId })
-})
+  }
+)
 
 export default router

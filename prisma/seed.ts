@@ -4,8 +4,16 @@ import bcrypt from 'bcryptjs'
 const prisma = new PrismaClient()
 
 async function main() {
-  const email = process.env.ADMIN_EMAIL ?? 'contato@guilhermemenezes.com'
-  const password = process.env.ADMIN_PASSWORD ?? 'changeme123'
+  // Sem defaults: uma password de exemplo acaba em produção. Ambas vêm do
+  // ambiente (ver .env.example).
+  const email = process.env.ADMIN_EMAIL
+  const password = process.env.ADMIN_PASSWORD
+  if (!email || !password) {
+    throw new Error('ADMIN_EMAIL e ADMIN_PASSWORD são obrigatórias para o seed')
+  }
+  if (password.length < 12) {
+    throw new Error('ADMIN_PASSWORD deve ter pelo menos 12 caracteres')
+  }
 
   const admin = await prisma.user.upsert({
     where: { email },

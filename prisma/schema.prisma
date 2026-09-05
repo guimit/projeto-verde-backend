@@ -87,6 +87,8 @@ model User {
 
   loginOtpCode         String?
   loginOtpExpires      DateTime?
+  // Tentativas erradas do código por email; ao 5.º erro o código é invalidado.
+  loginOtpAttempts     Int       @default(0)
   twoFactorSecret      String?
   passwordResetToken   String?   @unique
   passwordResetExpires DateTime?
