@@ -6,6 +6,10 @@ export const loginSchema = z.object({
   turnstileToken: z.string().min(1),
 })
 
+export const tempTokenSchema = z.object({
+  tempToken: z.string().min(1),
+})
+
 export const otpSchema = z.object({
   tempToken: z.string().min(1),
   code: z.string().min(6).max(6),

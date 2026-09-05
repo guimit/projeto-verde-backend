@@ -20,6 +20,31 @@ function generateOtpCode() {
   return String(crypto.randomInt(100_000, 1_000_000))
 }
 
+// Gera e persiste um novo código, tentando enviá-lo por email. O código fica
+// válido mesmo que o envio falhe (Resend fora do ar, chave inválida, etc.) —
+// assim uma falha de entrega não bloqueia o login: o utilizador pode pedir
+// reenvio (ou tentar de novo) sem perder o tempToken já emitido.
+async function issueLoginOtp(userId: string, email: string) {
+  const code = generateOtpCode()
+  const expiryMin = Number(process.env.LOGIN_OTP_EXPIRY_MIN ?? 10)
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      loginOtpCode: hashToken(code),
+      loginOtpExpires: new Date(Date.now() + expiryMin * 60_000),
+    },
+  })
+
+  try {
+    await sendLoginOtpEmail(email, code)
+    return { emailSent: true }
+  } catch (err) {
+    console.error('[auth] falha ao enviar código de login por email:', err)
+    return { emailSent: false }
+  }
+}
+
 export async function login(req: Request, res: Response) {
   const { email, password, turnstileToken } = req.body
 
@@ -34,20 +59,27 @@ export async function login(req: Request, res: Response) {
   }
   if (!user.active) return res.status(403).json({ error: 'Account disabled' })
 
-  const code = generateOtpCode()
-  const expiryMin = Number(process.env.LOGIN_OTP_EXPIRY_MIN ?? 10)
-
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      loginOtpCode: hashToken(code),
-      loginOtpExpires: new Date(Date.now() + expiryMin * 60_000),
-    },
-  })
-  await sendLoginOtpEmail(user.email, code)
-
+  const { emailSent } = await issueLoginOtp(user.id, user.email)
   const tempToken = signTemp({ userId: user.id, pending2FA: true })
-  return res.json({ requires2FA: true, tempToken })
+  return res.json({ requires2FA: true, tempToken, emailSent })
+}
+
+export async function resendOtp(req: Request, res: Response) {
+  const { tempToken } = req.body
+
+  let payload: any
+  try {
+    payload = jwt.verify(tempToken, process.env.JWT_SECRET!)
+  } catch {
+    return res.status(401).json({ error: 'Token inválido' })
+  }
+  if (!payload.pending2FA) return res.status(401).json({ error: 'Token inválido' })
+
+  const user = await prisma.user.findUnique({ where: { id: payload.userId } })
+  if (!user) return res.status(401).json({ error: 'Token inválido' })
+
+  const { emailSent } = await issueLoginOtp(user.id, user.email)
+  return res.json({ ok: true, emailSent })
 }
 
 export async function verify2FA(req: Request, res: Response) {
