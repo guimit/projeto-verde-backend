@@ -44,10 +44,11 @@ export const r2 = new S3Client({
 })
 
 // Isola os ficheiros por empresa; 'platform' para uploads do platform_admin
-// (ex.: imagem de cabeçalho de um template do catálogo global).
-export function buildKey(scope: string, filename: string): string {
-  const ext = (filename.split('.').pop() ?? 'bin').toLowerCase().replace(/[^a-z0-9]/g, '')
-  return `${scope}/${randomUUID()}.${ext || 'bin'}`
+// (ex.: imagem de cabeçalho de um template do catálogo global). A extensão é
+// a do tipo detectado pelos magic bytes (routes/uploads.ts) — nunca a do nome
+// original, que é controlado pelo cliente.
+export function buildKey(scope: string, ext: 'png' | 'jpg' | 'pdf'): string {
+  return `${scope}/${randomUUID()}.${ext}`
 }
 
 export function publicUrlFor(key: string): string {

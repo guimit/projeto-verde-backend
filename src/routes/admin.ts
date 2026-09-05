@@ -1,11 +1,16 @@
 import { Router } from 'express'
 import { authenticate, requirePlatformAdmin } from '../middleware/auth'
+import { validate } from '../middleware/validate'
+import { createUserSchema, listUsersQuery, metricsQuery } from '../schemas/admin'
 import { prisma } from '../utils/prisma'
 import bcrypt from 'bcryptjs'
 
 const router = Router()
 
-router.get('/overview', authenticate, requirePlatformAdmin, async (req, res) => {
+// Todas as rotas de /api/admin são exclusivas do platform_admin.
+router.use(authenticate, requirePlatformAdmin)
+
+router.get('/overview', async (req, res) => {
   const [totalCompanies, totalContacts, totalCampaigns] = await Promise.all([
     prisma.company.count({ where: { active: true } }),
     prisma.contact.count({ where: { active: true } }),
@@ -74,11 +79,8 @@ function resolveRange(range: MetricsRange): { from: Date; to: Date } {
   }
 }
 
-router.get('/metrics', authenticate, requirePlatformAdmin, async (req, res) => {
-  const range = String(req.query.range ?? '7d') as MetricsRange
-  if (!RANGES.includes(range)) {
-    return res.status(400).json({ error: 'range inválido' })
-  }
+router.get('/metrics', validate({ query: metricsQuery }), async (req, res) => {
+  const range = (res.locals.query as { range: MetricsRange }).range
   const { from, to } = resolveRange(range)
 
   const [
@@ -209,23 +211,34 @@ router.get('/metrics', authenticate, requirePlatformAdmin, async (req, res) => {
   })
 })
 
-router.get('/users', authenticate, requirePlatformAdmin, async (req, res) => {
-  const { companyId } = req.query
+router.get('/users', validate({ query: listUsersQuery }), async (req, res) => {
+  const { companyId } = res.locals.query as { companyId?: string }
   const users = await prisma.user.findMany({
-    where: companyId ? { companyId: String(companyId) } : undefined,
+    where: companyId ? { companyId } : undefined,
     select: { id: true, name: true, email: true, role: true, active: true, createdAt: true },
     orderBy: { createdAt: 'desc' },
   })
   res.json(users)
 })
 
-router.post('/users', authenticate, requirePlatformAdmin, async (req, res) => {
+router.post('/users', validate(createUserSchema), async (req, res) => {
   const { name, email, password, role, companyId } = req.body
+
+  if (companyId) {
+    const company = await prisma.company.findUnique({ where: { id: companyId }, select: { id: true } })
+    if (!company) return res.status(404).json({ error: 'Empresa não encontrada' })
+  }
+
   const hashed = await bcrypt.hash(password, 10)
-  const user = await prisma.user.create({
-    data: { name, email, password: hashed, role, companyId },
-  })
-  res.status(201).json({ id: user.id, name: user.name, email: user.email, role: user.role })
+  try {
+    const user = await prisma.user.create({
+      data: { name, email, password: hashed, role, companyId: companyId ?? null },
+    })
+    res.status(201).json({ id: user.id, name: user.name, email: user.email, role: user.role })
+  } catch (err: any) {
+    if (err?.code === 'P2002') return res.status(409).json({ error: 'Já existe um utilizador com esse email' })
+    throw err
+  }
 })
 
 export default router

@@ -1,15 +1,17 @@
 import { Router } from 'express'
-import { authenticate } from '../middleware/auth'
+import { authenticate, requireCompany, requireCompanyAdmin } from '../middleware/auth'
+import { validate } from '../middleware/validate'
+import { idParams } from '../schemas/common'
+import { phoneQuery } from '../schemas/contacts'
 import { prisma } from '../utils/prisma'
 
 const router = Router()
 
-function getCompanyId(req: any) {
-  return req.user.impersonating ?? req.user.companyId
-}
+// Todas as rotas exigem sessão e empresa activa (req.companyId vem de requireCompany).
+router.use(authenticate, requireCompany)
 
-router.get('/', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.get('/', async (req, res) => {
+  const companyId = req.companyId!
   const contacts = await prisma.contact.findMany({
     where: { companyId, active: true },
     orderBy: { createdAt: 'desc' },
@@ -22,8 +24,8 @@ router.get('/', authenticate, async (req, res) => {
 //  - 'whatsapp_optout': opt-out por WhatsApp ("sair"/"parar").
 // Ambas registam um ConsentEvent `revoked`, que é a fonte da lista. Fica um registo
 // por telefone (o mais recente). `rejoined` marca quem já tem de novo um contato ativo.
-router.get('/deleted', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.get('/deleted', async (req, res) => {
+  const companyId = req.companyId!
   const events = await prisma.consentEvent.findMany({
     where: { companyId, type: 'revoked' },
     orderBy: { createdAt: 'desc' },
@@ -56,10 +58,9 @@ router.get('/deleted', authenticate, async (req, res) => {
 // GET /api/contacts/consent?phone=... — histórico de consentimento por telefone.
 // Funciona para contatos ativos e removidos (os eventos são mantidos mesmo depois
 // de a linha Contact ser apagada, com contactId a null).
-router.get('/consent', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
-  const phone = String(req.query.phone ?? '')
-  if (!phone) return res.status(400).json({ error: 'phone required' })
+router.get('/consent', validate({ query: phoneQuery }), async (req, res) => {
+  const companyId = req.companyId!
+  const phone = String(req.query.phone)
 
   const events = await prisma.consentEvent.findMany({
     where: { companyId, phone },
@@ -72,10 +73,9 @@ router.get('/consent', authenticate, async (req, res) => {
 // eventos de consentimento (dado/revogado) + campanhas enviadas + criação do contato.
 // Ordenado do mais recente para o mais antigo. Funciona para contatos ativos,
 // em opt-out e removidos pelo painel (para estes as campanhas já não existem).
-router.get('/timeline', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
-  const phone = String(req.query.phone ?? '')
-  if (!phone) return res.status(400).json({ error: 'phone required' })
+router.get('/timeline', validate({ query: phoneQuery }), async (req, res) => {
+  const companyId = req.companyId!
+  const phone = String(req.query.phone)
 
   const [contact, consentEvents] = await Promise.all([
     prisma.contact.findFirst({ where: { companyId, phone } }),
@@ -155,8 +155,8 @@ router.get('/timeline', authenticate, async (req, res) => {
   })
 })
 
-router.get<{ id: string }>('/:id/consent', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.get<{ id: string }>('/:id/consent', validate({ params: idParams }), async (req, res) => {
+  const companyId = req.companyId!
   const contact = await prisma.contact.findFirst({
     where: { id: req.params.id, companyId },
   })
@@ -173,8 +173,8 @@ router.get<{ id: string }>('/:id/consent', authenticate, async (req, res) => {
 // Apaga o Contact e os dados pessoais na tabela Contact, mas preserva o histórico
 // de ConsentEvent como prova legal (desassociado do contato). A OptInSession é
 // apagada para que, se a pessoa quiser voltar, passe de novo por todo o duplo opt-in.
-router.delete<{ id: string }>('/:id', authenticate, async (req, res) => {
-  const companyId = getCompanyId(req)
+router.delete<{ id: string }>('/:id', requireCompanyAdmin, validate({ params: idParams }), async (req, res) => {
+  const companyId = req.companyId!
   const contact = await prisma.contact.findFirst({
     where: { id: req.params.id, companyId },
   })
@@ -209,14 +209,9 @@ router.delete<{ id: string }>('/:id', authenticate, async (req, res) => {
   res.status(204).end()
 })
 
-router.post('/optin', async (req, res) => {
-  const { companyId, phone, name, consentIp } = req.body
-  const contact = await prisma.contact.upsert({
-    where: { companyId_phone: { companyId, phone } },
-    update: { active: true, consentAt: new Date(), name },
-    create: { companyId, phone, name, consentAt: new Date(), consentIp },
-  })
-  res.status(201).json(contact)
-})
+// Não existe rota pública de opt-in: o consentimento entra só pelo double opt-in
+// por WhatsApp (routes/webhooks.ts). Uma rota aberta com companyId no body
+// permitia a qualquer pessoa criar contactos com consentimento forjado ou
+// reactivar quem fez opt-out.
 
 export default router

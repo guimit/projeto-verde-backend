@@ -1,6 +1,10 @@
-import { Router } from 'express'
+import crypto from 'crypto'
+import { Router, Request } from 'express'
+import { env } from '../config/env'
 import { prisma } from '../utils/prisma'
 import { sendWhatsAppText, sendWhatsAppTemplate } from '../lib/bird'
+import { maskPhone } from '../lib/log'
+import { webhookLimiter } from '../middleware/rateLimit'
 
 // Template publicado no Bird Studio para o aviso "fora do escopo" (com botão
 // "Conversar" que abre wa.me/<numero_whatsapp>). Override por env se mudar.
@@ -198,20 +202,73 @@ async function resolveCompany(channelId?: string, to?: string) {
   return null
 }
 
-// POST /api/webhooks/bird — inbound de WhatsApp (via Bird.com). Sem JWT.
-// O Bird não envia um header de segredo partilhado nos webhooks de canal — autentica
-// as entregas por assinatura HMAC. Enquanto essa validação não estiver implementada
-// (capturar o raw body em index.ts com express.json({ verify }) e validar o header
-// X-Bird-Signature contra o signing key da subscrição), o endpoint aceita o pedido.
-// Se BIRD_WEBHOOK_SECRET estiver definido e o header x-webhook-secret não bater certo,
-// apenas registamos um aviso — nunca bloqueamos, para não perder inbounds.
-router.post('/bird', async (req, res) => {
-  const secret = process.env.BIRD_WEBHOOK_SECRET
-  if (secret && req.header('x-webhook-secret') !== secret) {
-    console.warn('[bird webhook] x-webhook-secret ausente ou não corresponde — a aceitar mesmo assim')
+// Comparação em tempo constante, independente do comprimento (compara os hashes).
+function safeEqual(a: string, b: string): boolean {
+  const ha = crypto.createHash('sha256').update(a).digest()
+  const hb = crypto.createHash('sha256').update(b).digest()
+  return crypto.timingSafeEqual(ha, hb)
+}
+
+// Assinatura dos webhooks do Bird (formato "Standard Webhooks"): headers
+// webhook-id, webhook-timestamp (unix, segundos) e webhook-signature
+// ("v1,<base64>" — vários separados por espaço durante rotação de chave).
+// Assinado: HMAC-SHA256 de "{id}.{timestamp}.{corpo cru}" com a chave em
+// base64 a seguir ao prefixo whsec_. Timestamp com tolerância de 5 min (replay).
+function verifyBirdSignature(req: Request, signingSecret: string): boolean {
+  const id = req.header('webhook-id')
+  const ts = req.header('webhook-timestamp')
+  const sig = req.header('webhook-signature')
+  if (!id || !ts || !sig || !req.rawBody) return false
+
+  const age = Math.abs(Date.now() / 1000 - Number(ts))
+  if (!Number.isFinite(age) || age > 300) return false
+
+  const key = Buffer.from(signingSecret.slice('whsec_'.length), 'base64')
+  const expected = crypto
+    .createHmac('sha256', key)
+    .update(`${id}.${ts}.`)
+    .update(req.rawBody)
+    .digest('base64')
+
+  return sig.split(' ').some((part) => {
+    const [version, value] = part.split(',')
+    return version === 'v1' && !!value && safeEqual(value, expected)
+  })
+}
+
+// Quem pode chamar o webhook:
+//  1) assinatura HMAC válida (BIRD_WEBHOOK_SIGNING_SECRET), ou
+//  2) segredo partilhado (BIRD_WEBHOOK_SECRET) no header x-webhook-secret ou no
+//     URL da subscrição (?secret=...), para quando não há signing key.
+// Sem nenhum configurado só passa fora de produção (config/env.ts obriga em prod).
+function isAuthorizedWebhook(req: Request): boolean {
+  if (env.BIRD_WEBHOOK_SIGNING_SECRET) {
+    return verifyBirdSignature(req, env.BIRD_WEBHOOK_SIGNING_SECRET)
+  }
+  if (env.BIRD_WEBHOOK_SECRET) {
+    const fromHeader = req.header('x-webhook-secret')
+    const fromQuery = typeof req.query.secret === 'string' ? req.query.secret : undefined
+    const given = fromHeader ?? fromQuery ?? ''
+    return !!given && safeEqual(given, env.BIRD_WEBHOOK_SECRET)
+  }
+  return env.NODE_ENV !== 'production'
+}
+
+// POST /api/webhooks/bird — inbound de WhatsApp (via Bird.com). Sem JWT: a
+// autenticação é a assinatura/segredo acima. Um pedido não autenticado podia
+// fazer opt-out de qualquer contacto, forjar consentimentos e fazer o servidor
+// enviar mensagens WhatsApp para números à escolha.
+router.post('/bird', webhookLimiter, async (req, res) => {
+  if (!isAuthorizedWebhook(req)) {
+    console.warn('[bird webhook] pedido rejeitado: assinatura/segredo inválido', { ip: req.ip })
+    return res.status(401).json({ error: 'Unauthorized' })
   }
 
-  console.log('[bird webhook] inbound', JSON.stringify(req.body))
+  // Só metadados: o payload completo tem telefones, nomes e texto (PII).
+  console.log('[bird webhook] inbound', {
+    event: req.body?.event ?? req.body?.type ?? null,
+    service: req.body?.service ?? null,
+  })
 
   // Handshake de verificação do Bird.
   const challenge = req.body?.challenge ?? req.query?.challenge
@@ -274,7 +331,11 @@ router.post('/bird', async (req, res) => {
 
   try {
     const result = await runOptInFlow({ company, phone, text, inbound })
-    console.log('[bird webhook] resultado', { company: company.name, phone, text, ...result })
+    console.log('[bird webhook] resultado', {
+      companyId: company.id,
+      phone: maskPhone(phone),
+      ...result,
+    })
     return res.status(200).json({ ok: true, ...result })
   } catch (err) {
     console.error('[bird webhook] erro no fluxo de opt-in', err)

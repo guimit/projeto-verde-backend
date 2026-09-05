@@ -2,16 +2,22 @@ import crypto from 'crypto'
 import { Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import { env } from '../config/env'
 import { prisma } from '../utils/prisma'
 import { verifyTurnstileToken } from '../lib/turnstile'
 import { sendPasswordResetEmail, sendLoginOtpEmail } from '../lib/resend'
 import { generateTotpSecret, generateTotpQrDataUrl, verifyTotpCode } from '../lib/totp'
 
-const sign = (payload: object) =>
-  jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: '7d' })
+// Sessão de 24h: o token vive em localStorage no frontend (roubável por XSS),
+// por isso a janela é curta. A revogação é imediata de qualquer forma —
+// authenticate() confirma `active` na BD em cada pedido.
+const sign = (payload: object) => jwt.sign(payload, env.JWT_SECRET, { expiresIn: '24h' })
 
-const signTemp = (payload: object) =>
-  jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: '10m' })
+const signTemp = (payload: object) => jwt.sign(payload, env.JWT_SECRET, { expiresIn: '10m' })
+
+// Tentativas erradas de OTP por email antes de o código ser invalidado
+// (6 dígitos + 10 min sem tecto = força bruta viável).
+const MAX_OTP_ATTEMPTS = 5
 
 function hashToken(token: string) {
   return crypto.createHash('sha256').update(token).digest('hex')
@@ -34,6 +40,7 @@ async function issueLoginOtp(userId: string, email: string) {
     data: {
       loginOtpCode: hashToken(code),
       loginOtpExpires: new Date(Date.now() + expiryMin * 60_000),
+      loginOtpAttempts: 0,
     },
   })
 
@@ -78,7 +85,7 @@ export async function setup2FA(req: Request, res: Response) {
 
   let payload: any
   try {
-    payload = jwt.verify(tempToken, process.env.JWT_SECRET!)
+    payload = jwt.verify(tempToken, env.JWT_SECRET)
   } catch {
     return res.status(401).json({ error: 'Token inválido' })
   }
@@ -99,7 +106,7 @@ export async function confirmSetup2FA(req: Request, res: Response) {
 
   let payload: any
   try {
-    payload = jwt.verify(tempToken, process.env.JWT_SECRET!)
+    payload = jwt.verify(tempToken, env.JWT_SECRET)
   } catch {
     return res.status(401).json({ error: 'Token inválido' })
   }
@@ -124,7 +131,7 @@ export async function resendOtp(req: Request, res: Response) {
 
   let payload: any
   try {
-    payload = jwt.verify(tempToken, process.env.JWT_SECRET!)
+    payload = jwt.verify(tempToken, env.JWT_SECRET)
   } catch {
     return res.status(401).json({ error: 'Token inválido' })
   }
@@ -142,7 +149,7 @@ export async function verify2FA(req: Request, res: Response) {
 
   let payload: any
   try {
-    payload = jwt.verify(tempToken, process.env.JWT_SECRET!)
+    payload = jwt.verify(tempToken, env.JWT_SECRET)
   } catch {
     return res.status(401).json({ error: 'Token inválido' })
   }
@@ -161,15 +168,28 @@ export async function verify2FA(req: Request, res: Response) {
   const totpValid = !!user.twoFactorSecret && (await verifyTotpCode(user.twoFactorSecret, code))
 
   if (!emailValid && !totpValid) {
-    return res.status(401).json({ error: 'Código inválido ou expirado' })
-  }
-
-  if (emailValid) {
+    // Conta a falha; ao atingir o limite o código por email deixa de valer e o
+    // utilizador tem de pedir outro (resend-otp), que também é rate-limited.
+    const attempts = user.loginOtpAttempts + 1
+    const exhausted = attempts >= MAX_OTP_ATTEMPTS
     await prisma.user.update({
       where: { id: user.id },
-      data: { loginOtpCode: null, loginOtpExpires: null },
+      data: exhausted
+        ? { loginOtpCode: null, loginOtpExpires: null, loginOtpAttempts: 0 }
+        : { loginOtpAttempts: attempts },
+    })
+    return res.status(401).json({
+      error: exhausted
+        ? 'Demasiadas tentativas — peça um novo código'
+        : 'Código inválido ou expirado',
     })
   }
+
+  // Sucesso: o código por email é de uso único e o contador volta a zero.
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { loginOtpCode: null, loginOtpExpires: null, loginOtpAttempts: 0 },
+  })
 
   const token = sign({ userId: user.id, role: user.role, companyId: user.companyId })
   return res.json({

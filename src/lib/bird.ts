@@ -61,7 +61,9 @@ async function post(channelId: string, payload: unknown): Promise<SendResult> {
   }
 
   const url = `${BASE}/workspaces/${workspaceId}/channels/${channelId}/messages`
-  console.log('[bird] POST', url, JSON.stringify(payload))
+  // Sem o payload: tem telefone do destinatário e o texto da mensagem (PII).
+  const kind = (payload as { template?: unknown })?.template ? 'template' : 'text'
+  console.log('[bird] POST', url, { kind })
   try {
     const res = await fetch(url, {
       method: 'POST',
